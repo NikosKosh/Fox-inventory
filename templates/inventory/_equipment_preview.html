@@ -1,0 +1,13 @@
+<div class="preview-card">
+  <div class="preview-title"><div><span class="group-badge {{ object.accounting_group }}">{{ object.get_accounting_group_display }}</span><h2>{{ object.name }}</h2><p>{{ object.manufacturer }} {{ object.model }}</p></div><code>{{ object.internal_code|default:"без кода" }}</code></div>
+  <dl class="preview-details">
+    <dt>Серийный номер</dt><dd>{{ object.serial_number|default:"—" }}</dd><dt>Владелец</dt><dd>{{ object.owner }}</dd>
+    <dt>Статус</dt><dd><span class="badge">{{ object.get_usage_status_display }}</span></dd><dt>Состояние</dt><dd>{{ object.get_condition_display }}</dd>
+    <dt>Сотрудник</dt><dd>{% if object.responsible_employee %}<a href="{{ object.responsible_employee.get_absolute_url }}">{{ object.responsible_employee }}</a>{% else %}—{% endif %}</dd>
+    <dt>Объект</dt><dd>{% if object.location %}<a href="{{ object.location.get_absolute_url }}">{{ object.location.label|default:object.location.address }}</a>{% elif object.cabinet %}<a href="{{ object.cabinet.location.get_absolute_url }}">{{ object.cabinet.location.label|default:object.cabinet.location.address }}</a>{% else %}{{ object.freeform_location|default:"—" }}{% endif %}</dd>
+    <dt>Помещение</dt><dd>{% if object.room %}<a href="{{ object.room.get_absolute_url }}">{{ object.room.name }}</a>{% else %}—{% endif %}</dd>
+    {% if object.hostname %}<dt>Hostname</dt><dd>{{ object.hostname }}</dd>{% endif %}{% if object.network_address %}<dt>Адрес управления</dt><dd>{{ object.network_address }}</dd>{% endif %}
+  </dl>
+  {% if object.notes %}<div class="preview-note">{{ object.notes|linebreaksbr }}</div>{% endif %}
+  <div class="preview-actions"><a class="btn primary" href="{{ object.get_absolute_url }}">Открыть полную карточку</a><a class="btn" href="{% url 'equipment_edit' object.pk %}">Изменить</a></div>
+</div>

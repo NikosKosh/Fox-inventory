@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="FOX Inventory">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ff8a2a"/>
+      <stop offset="1" stop-color="#f15a00"/>
+    </linearGradient>
+  </defs>
+  <rect x="2" y="2" width="60" height="60" rx="15" fill="#111827" stroke="#303b4f" stroke-width="2"/>
+  <path d="M32 10 51 20.5 32 31 13 20.5 32 10Z" fill="url(#g)"/>
+  <path d="M13 20.5 32 31v22L13 42.5v-22Z" fill="#f97316" opacity=".9"/>
+  <path d="M51 20.5 32 31v22l19-10.5v-22Z" fill="#f8fafc"/>
+  <path d="M32 31 51 20.5M32 31 13 20.5M32 31v22" fill="none" stroke="#111827" stroke-width="2.4" stroke-linejoin="round" opacity=".72"/>
+  <path d="M22 17.2 32 22.8l10-5.6" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" opacity=".9"/>
+</svg>

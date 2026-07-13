@@ -1,0 +1,5 @@
+{% if page_obj and page_obj.paginator.num_pages > 1 %}<nav class="pagination" aria-label="Страницы">
+  {% if page_obj.has_previous %}<a href="?{% if query_string %}{{ query_string }}&{% endif %}page={{ page_obj.previous_page_number }}">← Назад</a>{% endif %}
+  <span>Страница {{ page_obj.number }} из {{ page_obj.paginator.num_pages }} · {{ page_obj.paginator.count }} записей</span>
+  {% if page_obj.has_next %}<a href="?{% if query_string %}{{ query_string }}&{% endif %}page={{ page_obj.next_page_number }}">Дальше →</a>{% endif %}
+</nav>{% endif %}

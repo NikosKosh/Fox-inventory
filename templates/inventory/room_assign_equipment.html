@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}Разместить оборудование — {{ object.name }}{% endblock %}
+{% block content %}
+<a class="back-link" href="{{ object.get_absolute_url }}">← {{ object.name }}</a>
+<div class="page-head"><div><span class="eyebrow">Размещение в помещении</span><h1>{{ object.name }}</h1><p class="muted">Будут показаны свободные позиции со склада и оборудование этого объекта без выбранной комнаты.</p></div></div>
+<form method="post" class="card operation-card">{% csrf_token %}
+{% if form.non_field_errors %}<div class="message error">{{ form.non_field_errors }}</div>{% endif %}
+<div class="selection-toolbar"><button class="btn small" type="button" data-select-all>Выбрать всё</button><button class="btn small" type="button" data-clear-all>Снять выбор</button><span class="muted">Выбрано: <b data-selected-count>0</b></span></div>
+<div class="equipment-picker room-picker">{% for checkbox in form.equipment %}<label class="equipment-choice"><span>{{ checkbox.tag }}</span><span class="choice-code">{{ checkbox.choice_label|truncatechars:22 }}</span><span class="choice-main"><b>{{ checkbox.choice_label }}</b></span></label>{% empty %}<div class="picker-empty"><b>Подходящего свободного оборудования нет.</b><p class="muted">Создай карточку оборудования непосредственно в этом помещении.</p></div>{% endfor %}</div>
+{% for error in form.equipment.errors %}<div class="field-error">{{ error }}</div>{% endfor %}
+<label class="field-label">{{ form.notes.label }}{{ form.notes }}{% for error in form.notes.errors %}<span class="field-error">{{ error }}</span>{% endfor %}</label>
+<div class="form-actions"><a class="btn" href="{{ object.get_absolute_url }}">Отмена</a><button class="btn primary" type="submit">Разместить выбранное</button></div></form>
+<script>(()=>{const boxes=[...document.querySelectorAll('input[name="equipment"]')],count=document.querySelector('[data-selected-count]');const update=()=>count.textContent=boxes.filter(x=>x.checked).length;document.querySelector('[data-select-all]')?.addEventListener('click',()=>{boxes.forEach(x=>x.checked=true);update()});document.querySelector('[data-clear-all]')?.addEventListener('click',()=>{boxes.forEach(x=>x.checked=false);update()});boxes.forEach(x=>x.addEventListener('change',update));update()})();</script>
+{% endblock %}

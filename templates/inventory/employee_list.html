@@ -1,0 +1,96 @@
+{% extends "base.html" %}{% load inventory_ui %}
+{% block title %}{% if show_archived %}Архив сотрудников{% else %}Сотрудники{% endif %} — FOX Inventory{% endblock %}
+{% block content %}
+<div class="page-head refined-page-head">
+  <div>
+    <span class="page-kicker">Учёт персонала</span>
+    <h1>{% if show_archived %}Архив сотрудников{% else %}Сотрудники{% endif %}</h1>
+    <p class="muted">{{ page_obj.paginator.count }} записей</p>
+  </div>
+  <div class="actions">
+    <a class="btn secondary" href="{% url 'archive_list' %}">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16v13H4V7Zm-1-4h18v4H3V3Zm6 8h6"/></svg>
+      Архив
+    </a>
+    <a class="btn primary" href="{% url 'employee_add' %}">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+      Добавить сотрудника
+    </a>
+  </div>
+</div>
+
+<form class="filter-panel auto-filter" method="get">
+  {% if show_archived %}<input type="hidden" name="archived" value="1">{% endif %}
+  <label class="search-field">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m21 21-4.4-4.4m2.4-5.1a7.5 7.5 0 1 1-15 0 7.5 7.5 0 0 1 15 0Z"/></svg>
+    <input type="search" name="q" value="{{ q }}" placeholder="Найти по ФИО, должности или телефону">
+  </label>
+  <label class="select-field">
+    <span>Объект</span>
+    <select name="location">
+      <option value="">Все объекты</option>
+      {% for x in locations %}<option value="{{ x.pk }}" {% if selected_location == x.pk|stringformat:'s' %}selected{% endif %}>{{ x.label|default:x.address }}</option>{% endfor %}
+    </select>
+  </label>
+  {% if q or selected_location %}<a class="clear-filter" href="{% url 'employee_list' %}">Сбросить</a>{% endif %}
+</form>
+
+<section class="data-card employee-table-card">
+  <div class="table-meta">
+    <div><b>Список сотрудников</b><span>Сортировка выполняется нажатием на заголовок колонки</span></div>
+    {% if request.GET.sort %}<span class="active-sort-note">Сортировка включена</span>{% endif %}
+  </div>
+  <div class="table-wrap employee-table-wrap">
+    <table class="data-table sortable-table employee-table">
+      <colgroup>
+        <col class="col-employee"><col class="col-org"><col class="col-role"><col class="col-location"><col class="col-phone"><col class="col-assets">
+      </colgroup>
+      <thead><tr>
+        <th>{% sort_header "full_name" "Сотрудник" "full_name" %}</th>
+        <th>{% sort_header "organization" "Организация" "full_name" %}</th>
+        <th>{% sort_header "department" "Подразделение и должность" "full_name" %}</th>
+        <th>{% sort_header "location" "Объект" "full_name" %}</th>
+        <th>{% sort_header "phone" "Телефон" "full_name" %}</th>
+        <th class="numeric-col">{% sort_header "equipment" "Техника" "full_name" %}</th>
+      </tr></thead>
+      <tbody>
+      {% for o in objects %}
+        <tr>
+          <td>
+            <div class="employee-identity">
+              <span class="employee-avatar" aria-hidden="true">{{ o.full_name|slice:":1" }}</span>
+              <div>
+                <a class="employee-name" href="{{ o.get_absolute_url }}?back={{ request.get_full_path|urlencode }}">{{ o.full_name }}</a>
+                {% if o.position %}<small>{{ o.position }}</small>{% endif %}
+              </div>
+            </div>
+          </td>
+          <td><span class="organization-tag">{{ o.organization }}</span></td>
+          <td>
+            <div class="role-cell">
+              <b>{{ o.department|default:"Не указано" }}</b>
+              {% if not o.position %}<small>Должность не указана</small>{% endif %}
+            </div>
+          </td>
+          <td>
+            {% if o.workplace_location %}
+              <a class="location-link" href="{{ o.workplace_location.get_absolute_url }}">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 10c0 5-8 11-8 11S4 15 4 10a8 8 0 1 1 16 0Z"/><circle cx="12" cy="10" r="2.5"/></svg>
+                <span>{{ o.workplace_location.label|default:o.workplace_location.address }}</span>
+              </a>
+            {% else %}
+              <span class="empty-value">{{ o.workplace|default:"Не назначен" }}</span>
+            {% endif %}
+          </td>
+          <td><span class="phone-value">{{ o.phone|default:"—" }}</span></td>
+          <td class="numeric-col"><span class="asset-count" title="Закреплено единиц оборудования">{{ o.equipment_count }}</span></td>
+        </tr>
+      {% empty %}
+        <tr><td colspan="6"><div class="empty-state"><b>Сотрудники не найдены</b><span>Измените поиск или фильтр по объекту.</span></div></td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% include "inventory/_pagination.html" %}
+{% endblock %}

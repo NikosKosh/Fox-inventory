@@ -1,0 +1,126 @@
+{% load static %}<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>{% block title %}FOX Inventory{% endblock %}</title>
+  <link rel="icon" href="{% static 'icons/favicon.svg' %}" type="image/svg+xml">
+  <link rel="icon" href="{% static 'icons/favicon-32.png' %}" sizes="32x32" type="image/png">
+  <link rel="apple-touch-icon" href="{% static 'icons/favicon-180.png' %}">
+  <link rel="manifest" href="{% static 'icons/site.webmanifest' %}">
+  <meta name="theme-color" content="#111827">
+  <link rel="stylesheet" href="{% static 'app.css' %}">
+</head>
+<body>
+{% if user.is_authenticated %}
+<header class="topbar app-header">
+  <div class="topbar-inner">
+    <a class="brand app-brand" href="{% url 'dashboard' %}" aria-label="FOX Inventory — главная">
+      <span class="brand-mark"><img src="{% static 'icons/favicon.svg' %}" alt=""></span>
+      <span class="brand-copy"><strong>FOX</strong><span>Inventory</span></span>
+    </a>
+
+    <button class="mobile-nav-toggle" type="button" aria-label="Открыть меню" data-mobile-nav>
+      <span></span><span></span><span></span>
+    </button>
+
+    <nav class="nav app-nav" data-nav aria-label="Основная навигация">
+      <a class="nav-item {% if request.resolver_match.url_name == 'dashboard' %}active{% endif %}" href="{% url 'dashboard' %}">Главная</a>
+      <a class="nav-item {% if request.resolver_match.url_name == 'warehouse' %}active{% endif %}" href="{% url 'warehouse' %}">Склад</a>
+      <a class="nav-item {% if request.resolver_match.url_name == 'employee_list' or request.resolver_match.url_name == 'employee_detail' %}active{% endif %}" href="{% url 'employee_list' %}">Сотрудники</a>
+      <a class="nav-item {% if request.resolver_match.url_name == 'location_list' or request.resolver_match.url_name == 'location_detail' %}active{% endif %}" href="{% url 'location_list' %}">Объекты / адреса</a>
+      <a class="nav-item {% if request.resolver_match.url_name == 'equipment_list' or request.resolver_match.url_name == 'equipment_detail' %}active{% endif %}" href="{% url 'equipment_list' %}">Оборудование</a>
+      <a class="nav-item attention-link {% if request.resolver_match.url_name == 'control_center' %}active{% endif %}" href="{% url 'control_center' %}">Контроль</a>
+      <details class="nav-more">
+        <summary>Ещё <span aria-hidden="true">⌄</span></summary>
+        <div class="nav-menu">
+          <a href="{% url 'act_list' %}">Акты</a>
+          <a href="{% url 'cabinet_list' %}">Шкафы</a>
+          <a href="{% url 'organization_list' %}">Организации</a>
+          <a href="{% url 'category_list' %}">Категории</a>
+          <a href="{% url 'archive_list' %}">Архив</a>
+          <a href="{% url 'import' %}">Импорт</a>
+        </div>
+      </details>
+    </nav>
+
+    <form class="global-search app-search" method="get" action="{% url 'global_search' %}">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m21 21-4.4-4.4m2.4-5.1a7.5 7.5 0 1 1-15 0 7.5 7.5 0 0 1 15 0Z"/></svg>
+      <input type="search" name="q" value="{{ request.GET.q|default:'' }}" placeholder="Поиск" aria-label="Глобальный поиск">
+    </form>
+
+    <form class="logout-form" method="post" action="{% url 'logout' %}">{% csrf_token %}
+      <button class="icon-button" type="submit" title="Выйти" aria-label="Выйти">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 4H5a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h5m4-4 4-4-4-4m4 4H9"/></svg>
+      </button>
+    </form>
+  </div>
+</header>
+{% endif %}
+
+<main class="container app-container">
+  {% for message in messages %}<div class="message {{ message.tags }}">{{ message }}</div>{% endfor %}
+  {% block content %}{% endblock %}
+</main>
+
+<div class="preview-backdrop" data-preview-backdrop hidden></div>
+<aside class="equipment-preview-drawer" data-preview-drawer aria-hidden="true">
+  <div class="preview-head"><b>Быстрый просмотр</b><button type="button" data-preview-close aria-label="Закрыть">×</button></div>
+  <div class="preview-body" data-preview-body><div class="preview-loading">Загрузка…</div></div>
+</aside>
+
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+  document.querySelectorAll("form.auto-filter").forEach(function (form) {
+    form.querySelectorAll("select").forEach(function (field) {
+      field.addEventListener("change", function () { form.requestSubmit(); });
+    });
+    form.querySelectorAll('input[type="search"], input[data-search-field]').forEach(function (field) {
+      field.addEventListener("keydown", function (event) {
+        if (event.key === "Enter") { event.preventDefault(); form.requestSubmit(); }
+      });
+      field.addEventListener("search", function () { form.requestSubmit(); });
+    });
+  });
+
+  const navToggle = document.querySelector('[data-mobile-nav]');
+  const nav = document.querySelector('[data-nav]');
+  if (navToggle && nav) {
+    navToggle.addEventListener('click', function () {
+      nav.classList.toggle('open');
+      navToggle.classList.toggle('open');
+    });
+  }
+
+  const drawer = document.querySelector('[data-preview-drawer]');
+  const backdrop = document.querySelector('[data-preview-backdrop]');
+  const body = document.querySelector('[data-preview-body]');
+  function closePreview() {
+    drawer.classList.remove('open');
+    drawer.setAttribute('aria-hidden','true');
+    backdrop.hidden = true;
+  }
+  document.addEventListener('click', async function(event) {
+    const trigger = event.target.closest('[data-equipment-preview]');
+    if (!trigger) return;
+    event.preventDefault();
+    event.stopPropagation();
+    backdrop.hidden = false;
+    drawer.classList.add('open');
+    drawer.setAttribute('aria-hidden','false');
+    body.innerHTML = '<div class="preview-loading">Загрузка…</div>';
+    try {
+      const response = await fetch(trigger.dataset.equipmentPreview, {headers:{'X-Requested-With':'XMLHttpRequest'}});
+      if (!response.ok) throw new Error();
+      body.innerHTML = await response.text();
+    } catch (e) {
+      body.innerHTML = '<div class="preview-error">Не удалось загрузить карточку.</div>';
+    }
+  });
+  document.querySelector('[data-preview-close]')?.addEventListener('click', closePreview);
+  backdrop?.addEventListener('click', closePreview);
+  document.addEventListener('keydown', function(e) { if (e.key === 'Escape') closePreview(); });
+});
+</script>
+</body>
+</html>

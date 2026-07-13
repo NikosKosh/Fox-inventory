@@ -1,0 +1,26 @@
+{% extends "base.html" %}{% block content %}
+<div class="page-head"><div><h1>Архив</h1><p class="muted">Уволенные сотрудники, архивное оборудование и организации.</p></div></div>
+
+<section class="card compact-table-card">
+  <div class="section-head compact-section"><h2>Сотрудники <span class="count-pill">{{ employees|length }}</span></h2></div>
+  <div class="table-wrap"><table class="dense-table"><thead><tr><th>ФИО</th><th>Организация</th><th>Должность</th><th>Рабочее место</th><th>Оборудование</th></tr></thead><tbody>
+  {% for o in employees %}<tr><td><a href="{{ o.get_absolute_url }}?back={{ request.get_full_path|urlencode }}">{{ o.full_name }}</a></td><td>{{ o.organization }}</td><td>{{ o.position|default:"—" }}</td><td>{{ o.workplace|default:"—" }}</td><td>{{ o.equipment_count }}</td></tr>{% empty %}<tr><td colspan="5">Архивных сотрудников нет.</td></tr>{% endfor %}
+  </tbody></table></div>
+</section>
+
+<section class="card compact-table-card">
+  <div class="section-head compact-section"><h2>Оборудование <span class="count-pill">{{ equipment|length }}</span></h2></div>
+  <div class="table-wrap"><table class="dense-table"><thead><tr><th>Код</th><th>Оборудование</th><th>Владелец</th><th>Ответственный</th><th>Статус</th></tr></thead><tbody>
+  {% for o in equipment %}<tr><td><code>{{ o.internal_code|default:"—" }}</code></td><td><a href="{{ o.get_absolute_url }}?back={{ request.get_full_path|urlencode }}">{{ o.name }}</a><small>{{ o.manufacturer }} {{ o.model }}</small></td><td>{{ o.owner }}</td><td>{{ o.responsible_employee|default:"—" }}</td><td>{{ o.get_usage_status_display }}</td></tr>{% empty %}<tr><td colspan="5">Архивного оборудования нет.</td></tr>{% endfor %}
+  </tbody></table></div>
+</section>
+
+{% if organizations %}
+<section class="card compact-table-card">
+  <div class="section-head compact-section"><h2>Организации <span class="count-pill">{{ organizations|length }}</span></h2></div>
+  <div class="table-wrap"><table class="dense-table"><thead><tr><th>Организация</th><th>Префикс</th><th>Сотрудников</th><th>Оборудования</th></tr></thead><tbody>
+  {% for o in organizations %}<tr><td>{{ o }}</td><td><code>{{ o.prefix }}</code></td><td>{{ o.employee_count }}</td><td>{{ o.equipment_count }}</td></tr>{% endfor %}
+  </tbody></table></div>
+</section>
+{% endif %}
+{% endblock %}

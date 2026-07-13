@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>{{ object }}</h1>
+    <p class="muted">{{ object.get_act_type_display }}</p>
+  </div>
+  <div class="actions">
+    {% if object.employee %}
+      <a class="btn primary" href="{{ object.employee.get_absolute_url }}">← К карточке сотрудника</a>
+    {% else %}
+      <a class="btn primary" href="{% url 'act_list' %}">← К списку актов</a>
+    {% endif %}
+    <a class="btn" href="{% url 'act_list' %}">Все акты</a>
+    <a class="btn" id="act-download" href="{% url 'act_download' object.pk %}">Скачать документ</a>
+    <a class="btn" href="{% url 'act_edit' object.pk %}">Изменить / заменить подписанным сканом</a>
+  </div>
+</div>
+<div class="grid two">
+  <section class="card">
+    <h2>Данные акта</h2>
+    <dl class="details">
+      <dt>Дата</dt><dd>{{ object.act_date|date:"d.m.Y" }}</dd>
+      <dt>Сотрудник</dt><dd>{% if object.employee %}<a href="{{ object.employee.get_absolute_url }}">{{ object.employee }}</a>{% else %}—{% endif %}</dd>
+      <dt>Передающая организация</dt><dd>{{ object.from_organization|default:"—" }}</dd>
+      <dt>Получающая организация</dt><dd>{{ object.to_organization|default:"—" }}</dd>
+      <dt>Комментарий</dt><dd>{{ object.notes|default:"—" }}</dd>
+      <dt>Публичная ссылка</dt><dd>{% if object.public_enabled %}<a href="{% url 'public_act' object.public_token %}" target="_blank">Открыть</a>{% else %}Выключена{% endif %}</dd>
+    </dl>
+    <h3>Оборудование</h3>
+    {% for item in object.equipment.all %}<a class="row-link" href="{{ item.get_absolute_url }}"><span>{{ item }}</span><small>{{ item.get_usage_status_display }}</small></a>{% empty %}<p class="muted">Не привязано.</p>{% endfor %}
+  </section>
+  <section class="card document-frame">
+    {% if object.document.name|lower|slice:'-4:' == '.pdf' %}<iframe src="{{ object.document.url }}"></iframe>{% elif object.document.name %}<p>DOCX хранится в системе. Используйте кнопку «Скачать документ».</p>{% else %}<p class="muted">Файл не загружен.</p>{% endif %}
+  </section>
+</div>
+<section class="card">
+  <h2>Операции по этому акту</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Дата</th><th>Оборудование</th><th>Операция</th><th>Откуда</th><th>Куда</th></tr></thead>
+      <tbody>
+      {% for item in movements %}
+        <tr>
+          <td>{{ item.created_at|date:"d.m.Y H:i" }}</td>
+          <td><a href="{{ item.equipment.get_absolute_url }}">{{ item.equipment.internal_code|default:item.equipment.name }}</a></td>
+          <td>{{ item.get_movement_type_display }}</td>
+          <td>{{ item.from_employee|default:item.from_organization|default:"—" }}</td>
+          <td>{{ item.to_employee|default:item.to_organization|default:"—" }}</td>
+        </tr>
+      {% empty %}<tr><td colspan="5">Связанных операций нет.</td></tr>{% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% if auto_download %}
+<script>
+window.addEventListener('load', () => {
+  const link = document.getElementById('act-download');
+  if (link) window.location.href = link.href;
+});
+</script>
+{% endif %}
+{% endblock %}

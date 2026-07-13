@@ -1,0 +1,15 @@
+{% extends "base.html" %}{% load static %}
+{% block title %}Вход — FOX Inventory{% endblock %}
+{% block content %}
+<div class="login-card refined-login-card">
+  <div class="brand-login">
+    <span class="brand-mark"><img src="{% static 'icons/favicon.svg' %}" alt=""></span>
+    <div><h1><strong>FOX</strong> Inventory</h1><p>Учёт оборудования и актов</p></div>
+  </div>
+  <form method="post" class="form-stack">{% csrf_token %}{{ form.non_field_errors }}
+    <label>Логин{{ form.username }}</label>
+    <label>Пароль{{ form.password }}</label>
+    <button class="btn primary" type="submit">Войти</button>
+  </form>
+</div>
+{% endblock %}

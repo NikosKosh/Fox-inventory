@@ -1,0 +1,12 @@
+{% extends "base.html" %}{% load inventory_ui %}
+{% block title %}Объекты — FOX Inventory{% endblock %}
+{% block content %}
+<div class="page-head"><div><h1>Объекты</h1><p class="muted">Сотрудники, рабочие места и техническая инфраструктура в одном месте.</p></div><a class="btn primary" href="{% url 'location_add' %}">Добавить объект</a></div>
+<form class="filters auto-filter" method="get"><input class="input grow" type="search" name="q" value="{{ q }}" placeholder="Название, адрес или организация">{% if q %}<a class="btn" href="{% url 'location_list' %}">Сбросить</a>{% endif %}</form>
+<div class="sort-toolbar" aria-label="Сортировка объектов"><span>Сортировать:</span>{% sort_chip "name" "Название" "name" %}{% sort_chip "organization" "Организация" "name" %}{% sort_chip "employees" "Сотрудники" "name" %}{% sort_chip "equipment" "Оборудование" "name" %}{% sort_chip "technical" "Техническое" "name" %}{% sort_chip "rooms" "Помещения" "name" %}{% sort_chip "cabinets" "Шкафы" "name" %}</div>
+<section class="object-grid prod-object-grid">{% for o in objects %}
+<a class="object-card prod-object-card" href="{{ o.get_absolute_url }}">
+  <div class="object-card-icon">⌖</div><div class="object-card-main"><h2>{{ o.label|default:o.address }}</h2><p>{{ o.address }}</p><small>{{ o.organization }}</small></div>
+  <div class="object-card-counts"><span><b>{{ o.employee_count }}</b> сотрудников</span><span><b>{{ o.equipment_count }}</b> оборудования</span><span><b>{{ o.technical_count }}</b> технического</span><span><b>{{ o.room_count }}</b> помещений</span><span><b>{{ o.cabinet_count }}</b> шкафов</span></div>
+</a>{% empty %}<section class="card"><p class="muted">Объектов пока нет.</p></section>{% endfor %}</section>
+{% endblock %}

@@ -1,0 +1,120 @@
+{% extends "base.html" %}
+{% block content %}
+<a class="back-link" href="{{ back_url }}">← Вернуться к списку</a>
+<div class="page-head compact-head">
+  <div>
+    <h1>{{ object.full_name }}</h1>
+    <p class="muted">{{ object.organization }}{% if object.position %} · {{ object.position }}{% endif %}</p>
+  </div>
+  <div class="actions">
+    {% if not object.archived %}
+      <a class="btn primary" href="{% url 'employee_assign_without_act' object.pk %}">Добавить оборудование</a>
+      <a class="btn" href="{% url 'employee_issue_equipment' object.pk %}">Выдать сразу с актом</a>
+      {% if equipment_without_act_count %}<a class="btn" href="{% url 'employee_generate_act' object.pk 'issue' %}">Оформить акт · {{ equipment_without_act_count }}</a>{% endif %}
+      {% if equipment %}<a class="btn" href="{% url 'employee_return_equipment' object.pk %}">Забрать оборудование</a>{% endif %}
+    {% endif %}
+    <a class="btn" href="{% url 'employee_edit' object.pk %}">Изменить</a>
+    <form method="post" action="{% url 'employee_archive' object.pk %}">{% csrf_token %}<button class="btn" type="submit">{% if object.archived %}Вернуть из архива{% else %}В архив{% endif %}</button></form>
+  </div>
+</div>
+
+<div class="employee-layout">
+  <section class="card employee-info-card">
+    <div class="section-head compact-section"><h2>Данные сотрудника</h2></div>
+    <dl class="details compact-details">
+      <dt>Юридическое лицо</dt><dd>{{ object.organization }}</dd>
+      <dt>Подразделение</dt><dd>{{ object.department|default:"—" }}</dd>
+      <dt>Должность</dt><dd>{{ object.position|default:"—" }}</dd>
+      <dt>Рабочее место</dt><dd>{% if object.workplace_location %}<a href="{{ object.workplace_location.get_absolute_url }}">{{ object.workplace_location.label|default:object.workplace_location.address }}</a>{% else %}{{ object.workplace|default:"—" }}{% endif %}</dd><dt>Помещение</dt><dd>{% if object.room %}<a href="{{ object.room.get_absolute_url }}">{{ object.room.name }}</a>{% else %}—{% endif %}</dd>
+      <dt>Телефон</dt><dd>{{ object.phone|default:"—" }}</dd>
+      <dt>Комментарий</dt><dd>{{ object.notes|default:"—" }}</dd>
+    </dl>
+  </section>
+
+  <section class="card employee-assets-card">
+    <div class="section-head compact-section">
+      <div><h2>Текущее оборудование <span class="count-pill">{{ equipment|length }}</span></h2></div>
+    </div>
+    {% if equipment_set.requirements %}
+    <div class="equipment-set-status {% if equipment_set.complete %}complete{% else %}incomplete{% endif %}">
+      <div>
+        <b>Комплект: {{ equipment_set.kind }}</b>
+        {% if equipment_set.complete %}<small>Комплект заполнен полностью.</small>{% else %}<small>Не хватает: {{ equipment_set.missing|join:", " }}.</small>{% endif %}
+      </div>
+      <div class="set-requirements">
+        {% for requirement in equipment_set.requirements %}
+          <span class="badge {% if not requirement.present %}warn{% endif %}">{{ requirement.label }} — {% if requirement.present %}есть{% else %}нет{% endif %}</span>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+    <div class="asset-list">
+      {% for item in equipment %}
+      <div class="asset-row preview-asset-row"><button class="preview-icon-btn" data-equipment-preview="{% url 'equipment_preview' item.pk %}">⌕</button><a href="{{ item.get_absolute_url }}?back={{ request.get_full_path|urlencode }}"><code>{{ item.internal_code|default:"без кода" }}</code>
+        <span><b>{{ item.name }}</b><small>{{ item.manufacturer }} {{ item.model }}{% if item.serial_number %} · SN: {{ item.serial_number }}{% endif %}</small></span></a>
+        <span class="asset-badges"><span class="badge">{{ item.get_usage_status_display }}</span>{% if item.current_assignment_has_act %}<span class="badge">Акт есть</span>{% else %}<span class="badge warn">Без акта</span>{% endif %}</span>
+      </div>
+      {% empty %}<p class="muted">Ничего не закреплено. Можно сначала добавить оборудование без акта, а документ оформить позднее.</p>{% endfor %}
+    </div>
+  </section>
+</div>
+
+{% if shared_equipment %}
+<section class="card">
+  <div class="section-head compact-section">
+    <div>
+      <h2>Общее оборудование рабочего места <span class="count-pill">{{ shared_equipment|length }}</span></h2>
+      <p class="muted">Оборудование закреплено за общим рабочим местом, но отображается в карточке сотрудника.</p>
+    </div>
+  </div>
+  <div class="asset-list">
+    {% for item in shared_equipment %}
+    <a class="asset-row" href="{{ item.get_absolute_url }}?back={{ request.get_full_path|urlencode }}">
+      <code>{{ item.internal_code|default:"без кода" }}</code>
+      <span><b>{{ item.name }}</b><small>{{ item.manufacturer }} {{ item.model }}{% if item.serial_number %} · SN: {{ item.serial_number }}{% endif %}</small></span>
+      <span class="badge">Общее место</span>
+    </a>
+    {% endfor %}
+  </div>
+</section>
+{% endif %}
+
+<section class="card">
+  <div class="section-head compact-section">
+    <div><h2>Акты</h2><p class="muted">Сформированные и подписанные документы, связанные с сотрудником.</p></div>
+    <a class="btn small" href="{% url 'act_add' %}?employee={{ object.pk }}">Загрузить подписанный акт</a>
+  </div>
+  {% for act in acts %}
+    <a class="row-link compact-row" href="{{ act.get_absolute_url }}">
+      <span>{{ act.act_date|date:"d.m.Y" }} · {{ act.get_act_type_display }}</span>
+      <small>{{ act.equipment.count }} ед. · {{ act.document.name|default:"без файла" }}</small>
+    </a>
+  {% empty %}<p class="muted">Нет связанных актов.</p>{% endfor %}
+</section>
+
+<section class="card">
+  <div class="section-head compact-section"><h2>История оборудования</h2></div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Дата</th><th>Оборудование</th><th>Операция</th><th>Откуда</th><th>Куда</th><th>Документ</th></tr></thead>
+      <tbody>
+      {% for item in history %}
+        <tr>
+          <td>{{ item.created_at|date:"d.m.Y H:i" }}</td>
+          <td><a href="{{ item.equipment.get_absolute_url }}">{{ item.equipment.internal_code|default:item.equipment.name }}</a></td>
+          <td>{{ item.get_movement_type_display }}</td>
+          <td>{{ item.from_employee|default:item.from_organization|default:"—" }}</td>
+          <td>{{ item.to_employee|default:item.to_organization|default:"—" }}</td>
+          <td>{% if item.act %}<a href="{{ item.act.get_absolute_url }}">Акт от {{ item.act.act_date|date:"d.m.Y" }}</a>{% else %}—{% endif %}</td>
+        </tr>
+      {% empty %}<tr><td colspan="6">История пуста.</td></tr>{% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="card danger-zone compact-danger">
+  <div><h2>Удаление</h2><p class="muted">Доступно только при отсутствии оборудования, актов и истории.</p></div>
+  <form method="post" action="{% url 'employee_delete' object.pk %}" onsubmit="return confirm('Удалить сотрудника без возможности восстановления?')">{% csrf_token %}<button class="btn danger small" type="submit">Удалить сотрудника</button></form>
+</section>
+{% endblock %}

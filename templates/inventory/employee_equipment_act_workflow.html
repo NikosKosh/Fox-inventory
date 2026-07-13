@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-head compact-head">
+  <div>
+    <a class="back-link" href="{{ object.get_absolute_url }}">← {{ object.full_name }}</a>
+    <h1>{{ title }}</h1>
+    <p class="muted">
+      {% if operation == "issue" %}
+        Выберите оборудование. После подтверждения оно будет закреплено за сотрудником, а заполненный акт сохранится в системе и скачается в DOCX.
+      {% else %}
+        Оборудование сотрудника выбрано автоматически. После подтверждения акт сохранится, а выбранные позиции сразу вернутся на склад.
+      {% endif %}
+    </p>
+  </div>
+</div>
+
+<form method="post" class="card act-builder">
+  {% csrf_token %}
+  {% if form.non_field_errors %}<div class="message error">{{ form.non_field_errors }}</div>{% endif %}
+
+  <div class="form-grid two-cols">
+    <label class="field-label">{{ form.act_date.label }}{{ form.act_date }}{{ form.act_date.errors }}</label>
+    <label class="field-label">{{ form.city.label }}{{ form.city }}{{ form.city.errors }}</label>
+    <label class="field-label span-2">{{ form.organization_name.label }}{{ form.organization_name }}{{ form.organization_name.errors }}</label>
+    <label class="field-label">{{ form.representative_position.label }}{{ form.representative_position }}{{ form.representative_position.errors }}</label>
+    <label class="field-label">{{ form.representative_name.label }}{{ form.representative_name }}{{ form.representative_name.errors }}</label>
+  </div>
+
+  <div class="section-head compact-section">
+    <div>
+      <h2>Оборудование</h2>
+      <p class="muted">{% if operation == "return" %}По умолчанию выбрано всё оборудование сотрудника.{% else %}Доступны позиции со склада и из резерва.{% endif %}</p>
+    </div>
+    <div class="actions">
+      <button class="btn small" type="button" data-select-all>Выбрать всё видимое</button>
+      <button class="btn small" type="button" data-clear-all>Снять выбор</button>
+    </div>
+  </div>
+
+  <div class="selection-toolbar">
+    <input id="equipment-filter" class="input grow" type="search" placeholder="Поиск по коду, названию, модели или серийному номеру">
+    <span class="muted">Выбрано: <b id="selected-count">0</b></span>
+  </div>
+
+  <div class="equipment-picker compact-picker">
+    {% for item in form.fields.equipment.queryset %}
+      <label class="equipment-choice" data-search="{{ item.internal_code }} {{ item.name }} {{ item.manufacturer }} {{ item.model }} {{ item.serial_number }} {{ item.owner }}">
+        <input type="checkbox" name="equipment" value="{{ item.pk }}" {% if item.pk|stringformat:'s' in selected_equipment_ids %}checked{% endif %}>
+        <span class="choice-code">{{ item.internal_code|default:"без кода" }}</span>
+        <span class="choice-main"><b>{{ item.name }}</b><small>{{ item.manufacturer }} {{ item.model }}{% if item.serial_number %} · SN: {{ item.serial_number }}{% endif %}</small></span>
+        <span class="choice-owner">{{ item.owner }}</span>
+      </label>
+    {% empty %}
+      <p class="muted picker-empty">{% if operation == "issue" %}Нет свободного оборудования для выдачи.{% else %}За сотрудником ничего не закреплено.{% endif %}</p>
+    {% endfor %}
+  </div>
+  {% if form.equipment.errors %}<div class="field-error">{{ form.equipment.errors }}</div>{% endif %}
+
+  <label class="field-label">{{ form.notes.label }}{{ form.notes }}{{ form.notes.errors }}</label>
+  <div class="form-actions">
+    <a class="btn" href="{{ object.get_absolute_url }}">Пока без операции</a>
+    <button class="btn primary" type="submit">
+      {% if operation == "issue" %}Сформировать акт и выдать{% else %}Сформировать акт и вернуть на склад{% endif %}
+    </button>
+  </div>
+</form>
+
+<script>
+(function(){
+  const filter = document.getElementById('equipment-filter');
+  const rows = Array.from(document.querySelectorAll('.equipment-choice'));
+  const count = document.getElementById('selected-count');
+  function visible(row){ return row.style.display !== 'none'; }
+  function refresh(){ count.textContent = document.querySelectorAll('.equipment-choice input:checked').length; }
+  filter?.addEventListener('input', () => {
+    const q = filter.value.trim().toLowerCase();
+    rows.forEach(row => row.style.display = !q || row.dataset.search.toLowerCase().includes(q) ? '' : 'none');
+  });
+  document.querySelector('[data-select-all]')?.addEventListener('click', () => { rows.filter(visible).forEach(r => r.querySelector('input').checked = true); refresh(); });
+  document.querySelector('[data-clear-all]')?.addEventListener('click', () => { rows.forEach(r => r.querySelector('input').checked = false); refresh(); });
+  rows.forEach(r => r.querySelector('input').addEventListener('change', refresh));
+  refresh();
+})();
+</script>
+{% endblock %}

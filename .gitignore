@@ -1,0 +1,30 @@
+# Runtime configuration and data
+.env
+.env.*
+!.env.example
+data/
+media/
+backups/
+staticfiles/
+db.sqlite3
+*.sqlite3
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Editors and operating systems
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+dist/
+build/
+*.egg-info/

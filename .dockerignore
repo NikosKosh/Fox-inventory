@@ -1,0 +1,15 @@
+.git
+.github
+.env
+.env.*
+data
+media
+backups
+staticfiles
+.venv
+venv
+__pycache__
+*.py[cod]
+*.sqlite3
+.coverage
+htmlcov

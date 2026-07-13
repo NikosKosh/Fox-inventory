@@ -1,0 +1,29 @@
+# Changelog
+
+## 1.1.1
+
+- Prepared a complete repository snapshot suitable for Git-based development.
+- Removed historical patch installers and one-off data correction commands.
+- Removed organization-specific names, addresses, serial numbers, and operational datasets from source control.
+- Replaced hard-coded transfer document representatives and city values with environment configuration.
+- Added repository documentation, CI configuration, development commands, and security guidance.
+- Normalized interface guidance and source comments to impersonal technical language.
+
+## 1.1.0
+
+- Added rooms within facilities.
+- Added room assignment for employees, equipment, and network cabinets.
+- Added room cards, room equipment views, and bulk placement.
+- Added room support to global search, Excel import, and Excel export.
+
+## 1.0.2
+
+- Refreshed the visual design, navigation, tables, icons, and authentication screen.
+
+## 1.0.1
+
+- Added server-side sorting for major lists and favicon support.
+
+## 1.0.0
+
+- Introduced facility-centered navigation, global search, quick equipment preview, pagination, and data quality control.
