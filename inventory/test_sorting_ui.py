@@ -30,7 +30,8 @@ class SortingAndBrandingTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "sort=full_name&amp;dir=asc")
         self.assertContains(response, f"location={self.loc_a.pk}")
-        self.assertContains(response, "state-desc")
+        self.assertContains(response, "sort-indicator state-desc")
+        self.assertNotContains(response, 'title="Сортировать')
 
         response = self.client.get(reverse("employee_list"), {"sort": "phone", "dir": "asc"})
         names = [item.full_name for item in response.context["objects"]]

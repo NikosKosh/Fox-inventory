@@ -224,3 +224,51 @@ a{color:inherit}
 .room-overview-section .section-head>div p,.page-inline-actions p{margin:4px 0 0}.room-grid{display:grid;grid-template-columns:repeat(3,minmax(250px,1fr));gap:12px}.room-grid-large{grid-template-columns:repeat(2,minmax(340px,1fr))}.room-card{display:grid;grid-template-columns:44px minmax(0,1fr) auto;align-items:center;gap:12px;min-height:78px;padding:13px;border:1px solid #2c394d;border-radius:12px;background:#121a25;color:var(--text);transition:.14s ease}.room-card:hover{border-color:#506078;background:#192433;color:#fff;transform:translateY(-1px)}.room-card.detailed{display:block;padding:0;overflow:hidden}.room-card-link{display:grid;grid-template-columns:48px minmax(0,1fr) auto;align-items:center;gap:13px;padding:15px;color:var(--text)}.room-card-actions{display:flex;gap:14px;padding:9px 15px;border-top:1px solid #283548;background:#101721;font-size:12px}.room-icon{display:grid;place-items:center;width:44px;height:44px;border:1px solid #3a4960;border-radius:11px;background:#1c2838;color:#ff9c5a;font-size:23px;font-weight:700}.room-type-meeting{background:#2a211c;border-color:#6b4529}.room-type-server{background:#17283a;border-color:#315879;color:#7fc2ff}.room-type-storage{background:#222735;border-color:#48516a;color:#b9c5da}.room-main{min-width:0;display:grid;gap:2px}.room-main b{font-size:14px;color:#f1f4f8}.room-main small{font-size:12px}.room-main em{margin-top:4px;color:#7f8da1;font-size:12px;font-style:normal}.room-counts{display:grid;gap:3px;justify-items:end;color:#9aa8ba;font-size:11px;white-space:nowrap}.room-counts b{color:#e7ecf3}.empty-room-state{grid-column:1/-1;display:grid;justify-items:start;gap:7px;padding:22px;border:1px dashed #354258;border-radius:12px;background:#101721;color:#8d9bad}.empty-room-state b{color:#e2e8f0}.detail-tabs a span{display:inline-grid;place-items:center;min-width:20px;height:20px;margin-left:5px;padding:0 5px;border-radius:999px;background:#263348;font-size:10px}.page-inline-actions{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;margin:0 0 14px}.page-inline-actions h2{margin:0}.room-hero{margin-top:4px}.room-summary{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:16px}.room-summary>div{padding:13px 15px;border:1px solid var(--line);border-radius:11px;background:#121a25}.room-summary b{display:block;color:#ff9c5a;font-size:24px}.room-summary span{color:#8e9caf;font-size:12px}.room-note{display:grid;grid-template-columns:110px 1fr;gap:16px;margin-bottom:16px;padding:13px 15px;border-left:3px solid #f97316;border-radius:0 10px 10px 0;background:#151d28}.room-note span{color:#8896aa;font-size:12px;text-transform:uppercase;letter-spacing:.06em}.room-note p{margin:0}.room-layout{grid-template-columns:minmax(0,1.7fr) minmax(280px,.7fr)}.room-equipment-list{display:grid}.room-equipment-row{width:100%;display:grid;grid-template-columns:8px 110px minmax(0,1fr) auto;align-items:center;gap:10px;padding:10px 4px;border:0;border-top:1px solid var(--line);background:none;color:var(--text);text-align:left;cursor:pointer}.room-equipment-row:first-child{border-top:0}.room-equipment-row:hover{background:#192433}.group-dot{width:7px;height:7px;border-radius:999px;background:#64748b}.group-dot.technical{background:#f97316}.group-dot.employee{background:#60a5fa}.room-equipment-code{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;color:#ffb27d;font-size:12px}.room-equipment-main{min-width:0}.room-equipment-main b,.room-equipment-main small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.room-cabinet{margin-bottom:8px}.person-row.compact{padding:8px 2px}.room-picker .equipment-choice{grid-template-columns:24px minmax(120px,180px) minmax(0,1fr)}
 @media(max-width:1050px){.room-grid,.room-grid-large{grid-template-columns:1fr 1fr}.room-layout{grid-template-columns:1fr}.room-summary{grid-template-columns:repeat(3,1fr)}}
 @media(max-width:700px){.room-grid,.room-grid-large{grid-template-columns:1fr}.room-card-link,.room-card{grid-template-columns:42px minmax(0,1fr)}.room-counts{grid-column:2;justify-items:start}.page-inline-actions{align-items:flex-start;flex-direction:column}.room-summary{grid-template-columns:1fr 1fr}.room-equipment-row{grid-template-columns:8px minmax(0,1fr) auto}.room-equipment-code{grid-column:2}.room-equipment-main{grid-column:2}.room-equipment-row .badge{grid-column:3;grid-row:1/3}.room-picker .equipment-choice{grid-template-columns:24px minmax(0,1fr)}}
+
+
+/* Sorting controls */
+.sortable-link{
+  position:relative;
+  display:flex;
+  align-items:center;
+  justify-content:flex-start;
+  gap:8px;
+  width:100%;
+  min-height:46px;
+  padding:0 12px;
+  color:#94a3b8;
+  background:transparent;
+  text-decoration:none;
+  white-space:normal;
+}
+.sortable-link:hover{color:#e8edf4;background:#172130}
+.sortable-link:focus-visible{outline:2px solid rgba(249,115,22,.75);outline-offset:-3px;border-radius:6px}
+.sortable-link.active{color:#f4f7fb;background:#172130}
+.sort-label{min-width:0;line-height:1.2}
+.sort-indicator{
+  display:inline-grid;
+  place-items:center;
+  flex:0 0 18px;
+  width:18px;
+  height:18px;
+  margin-left:auto;
+  border:0;
+  border-radius:0;
+  background:transparent;
+  color:#566579;
+  opacity:.8;
+  transition:color .12s ease,opacity .12s ease,transform .12s ease;
+}
+.sort-indicator svg{display:block;width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.sortable-link:hover .sort-indicator{color:#aeb9c8;opacity:1;background:transparent}
+.sortable-link.active .sort-indicator{color:#f97316;opacity:1;background:transparent}
+.sortable-link.active:hover .sort-indicator{color:#fb923c}
+.sort-indicator.state-none{opacity:.48}
+.sort-indicator.state-asc,.sort-indicator.state-desc{transform:translateY(-1px)}
+.numeric-col .sortable-link{justify-content:center}
+.numeric-col .sortable-link .sort-indicator{margin-left:2px}
+.sort-chip{gap:6px}
+.sort-chip .sort-indicator{width:15px;height:15px;flex-basis:15px;margin-left:0}
+.sort-chip .sort-indicator svg{width:13px;height:13px}
+.sort-chip.active .sort-indicator{color:#ff9c5a}
+@media(max-width:680px){.sortable-link{min-height:42px;padding:0 10px}.sort-indicator{flex-basis:16px;width:16px;height:16px}}

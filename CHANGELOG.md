@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.1.3
+
+- Replaced browser-native sorting tooltips with accessible labels.
+- Reworked table sorting indicators to use compact SVG chevrons without colored blocks.
+- Unified sorting indicators in table headers and compact sort controls.
+- Added keyboard focus styling and regression tests for sorting controls.
+
 ## 1.1.1
 
 - Prepared a complete repository snapshot suitable for Git-based development.
