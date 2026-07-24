@@ -5,6 +5,7 @@ from django.core.exceptions import ValidationError
 from django.db.models import Q
 from django.utils import timezone
 from .models import Act, Cabinet, Category, Employee, Equipment, EquipmentLoan, Location, Organization, RepairRecord, Room
+from .validators import normalize_mac_address
 
 
 class StyledModelForm(forms.ModelForm):
@@ -118,11 +119,15 @@ class EquipmentForm(StyledModelForm):
     class Meta:
         model = Equipment
         fields = [
-            "category", "accounting_group", "internal_code", "name", "manufacturer", "model", "serial_number", "hostname",
+            "category", "accounting_group", "internal_code", "name", "manufacturer", "model", "serial_number", "mac_address", "hostname",
             "owner", "responsible_employee", "location", "room", "cabinet", "freeform_location", "quantity",
             "usage_status", "condition", "notes", "network_address", "network_username", "archived",
         ]
         widgets = {"notes": forms.Textarea(attrs={"rows": 4})}
+
+
+    def clean_mac_address(self):
+        return normalize_mac_address(self.cleaned_data.get("mac_address", ""))
 
     def clean(self):
         data = super().clean()

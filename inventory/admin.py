@@ -14,9 +14,9 @@ class EmployeeAdmin(admin.ModelAdmin):
 
 @admin.register(Equipment)
 class EquipmentAdmin(admin.ModelAdmin):
-    list_display = ("internal_code", "name", "category", "owner", "responsible_employee", "usage_status", "condition")
+    list_display = ("internal_code", "name", "category", "mac_address", "owner", "responsible_employee", "usage_status", "condition")
     list_filter = ("category", "owner", "usage_status", "condition", "archived")
-    search_fields = ("internal_code", "name", "manufacturer", "model", "serial_number", "hostname")
+    search_fields = ("internal_code", "name", "manufacturer", "model", "serial_number", "mac_address", "hostname", "network_address")
 
 admin.site.register([Location, Room, Cabinet, Category, EquipmentLoan, EquipmentMovement, Act, RepairRecord])
 admin.site.site_header = "FOX Inventory — администрирование"

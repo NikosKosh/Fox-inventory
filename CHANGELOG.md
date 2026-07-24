@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.1.4
+
+- Added a normalized MAC-address field to equipment cards.
+- Added MAC-address validation and uniqueness protection for non-empty values.
+- Added MAC addresses to equipment forms, cards, previews, search, import and XLSX export.
+- Added regression tests for MAC normalization, validation, search and export.
+
 ## 1.1.3
 
 - Replaced browser-native sorting tooltips with accessible labels.

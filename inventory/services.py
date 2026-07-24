@@ -7,7 +7,7 @@ from .models import Category, Employee, Equipment, EquipmentMovement, Location, 
 
 IMPORT_COLUMNS = [
     "organization", "organization_prefix", "organization_kind", "category", "category_code", "accounting_group",
-    "name", "manufacturer", "model", "serial_number", "internal_code", "hostname",
+    "name", "manufacturer", "model", "serial_number", "mac_address", "internal_code", "hostname",
     "status", "condition", "employee", "position", "phone", "address", "location_label", "room", "room_type",
     "freeform_location", "quantity", "notes", "network_address", "network_username",
 ]
@@ -107,6 +107,7 @@ def import_equipment(uploaded_file, user=None):
                 "manufacturer": row.get("manufacturer", ""),
                 "model": row.get("model", ""),
                 "serial_number": row.get("serial_number", ""),
+                "mac_address": row.get("mac_address") or row.get("mac") or row.get("mac-адрес") or row.get("mac адрес") or "",
                 "hostname": row.get("hostname", ""),
                 "owner": org,
                 "responsible_employee": employee,
@@ -150,14 +151,14 @@ def equipment_export_workbook(queryset):
     ws = wb.active
     ws.title = "Оборудование"
     headers = [
-        "Код", "Контур учёта", "Категория", "Наименование", "Производитель", "Модель", "Серийный номер", "Hostname",
+        "Код", "Контур учёта", "Категория", "Наименование", "Производитель", "Модель", "Серийный номер", "MAC-адрес", "Hostname",
         "Владелец", "Сотрудник", "Организация сотрудника", "Статус", "Состояние", "Адрес", "Помещение", "Шкаф",
         "Место текстом", "Количество", "Адрес управления", "Логин", "Комментарий",
     ]
     ws.append(headers)
     for obj in queryset.select_related("category", "owner", "responsible_employee__organization", "location", "room", "cabinet"):
         ws.append([
-            obj.internal_code, obj.get_accounting_group_display(), obj.category.name, obj.name, obj.manufacturer, obj.model, obj.serial_number, obj.hostname,
+            obj.internal_code, obj.get_accounting_group_display(), obj.category.name, obj.name, obj.manufacturer, obj.model, obj.serial_number, obj.mac_address, obj.hostname,
             str(obj.owner), obj.responsible_employee.full_name if obj.responsible_employee else "",
             str(obj.responsible_employee.organization) if obj.responsible_employee else "",
             obj.get_usage_status_display(), obj.get_condition_display(), str(obj.location) if obj.location else "",
@@ -180,7 +181,7 @@ def import_template_workbook():
     ws.append(IMPORT_COLUMNS)
     ws.append([
         "ООО Компания", "ORG", "company", "Ноутбук", "N", "employee", "Ноутбук", "Lenovo", "ThinkPad",
-        "SN123", "ORG-N-001", "org-n-001", "employee", "used", "Иванов Иван Иванович",
+        "SN123", "AA:BB:CC:DD:EE:FF", "ORG-N-001", "org-n-001", "employee", "used", "Иванов Иван Иванович",
         "Инженер", "+7...", "г. Город, ул. Примерная, д. 1", "Главный офис", "Переговорная", "meeting", "", 1, "", "", "",
     ])
     stream = BytesIO()

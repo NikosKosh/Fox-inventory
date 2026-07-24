@@ -2,10 +2,11 @@ import secrets
 from django.conf import settings
 from django.core.validators import MinValueValidator
 from django.db import models, transaction
+from django.db.models import Q
 from django.urls import reverse
 from django.utils import timezone
 from .crypto import decrypt_text, encrypt_text
-from .validators import validate_document
+from .validators import normalize_mac_address, validate_document, validate_mac_address
 
 
 class TimeStampedModel(models.Model):
@@ -188,6 +189,7 @@ class Equipment(TimeStampedModel):
     manufacturer = models.CharField("Производитель", max_length=150, blank=True)
     model = models.CharField("Модель", max_length=180, blank=True)
     serial_number = models.CharField("Серийный номер", max_length=180, blank=True)
+    mac_address = models.CharField("MAC-адрес", max_length=17, blank=True, validators=[validate_mac_address], db_index=True)
     hostname = models.CharField("Hostname", max_length=180, blank=True)
     owner = models.ForeignKey(Organization, verbose_name="Владелец", on_delete=models.PROTECT, related_name="owned_equipment")
     responsible_employee = models.ForeignKey(Employee, verbose_name="Ответственный сотрудник", on_delete=models.PROTECT, null=True, blank=True, related_name="equipment")
@@ -212,6 +214,13 @@ class Equipment(TimeStampedModel):
             models.Index(fields=["internal_code"]),
             models.Index(fields=["serial_number"]),
             models.Index(fields=["hostname"]),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["mac_address"],
+                condition=~Q(mac_address=""),
+                name="uniq_nonempty_equipment_mac",
+            ),
         ]
 
     def __str__(self):
@@ -241,6 +250,7 @@ class Equipment(TimeStampedModel):
         return f"{base}{max_num + 1:03d}"
 
     def save(self, *args, **kwargs):
+        self.mac_address = normalize_mac_address(self.mac_address)
         if not self.internal_code and self.category_id and self.owner_id and self.category.tracking_mode == Category.TrackingMode.UNIT:
             with transaction.atomic():
                 self.internal_code = self.next_code(self.owner, self.category)

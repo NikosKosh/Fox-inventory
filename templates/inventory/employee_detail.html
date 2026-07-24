@@ -51,7 +51,7 @@
     <div class="asset-list">
       {% for item in equipment %}
       <div class="asset-row preview-asset-row"><button class="preview-icon-btn" data-equipment-preview="{% url 'equipment_preview' item.pk %}">⌕</button><a href="{{ item.get_absolute_url }}?back={{ request.get_full_path|urlencode }}"><code>{{ item.internal_code|default:"без кода" }}</code>
-        <span><b>{{ item.name }}</b><small>{{ item.manufacturer }} {{ item.model }}{% if item.serial_number %} · SN: {{ item.serial_number }}{% endif %}</small></span></a>
+        <span><b>{{ item.name }}</b><small>{{ item.manufacturer }} {{ item.model }}{% if item.serial_number %} · SN: {{ item.serial_number }}{% endif %}{% if item.mac_address %} · MAC: {{ item.mac_address }}{% endif %}</small></span></a>
         <span class="asset-badges"><span class="badge">{{ item.get_usage_status_display }}</span>{% if item.current_assignment_has_act %}<span class="badge">Акт есть</span>{% else %}<span class="badge warn">Без акта</span>{% endif %}</span>
       </div>
       {% empty %}<p class="muted">Ничего не закреплено. Можно сначала добавить оборудование без акта, а документ оформить позднее.</p>{% endfor %}
@@ -71,7 +71,7 @@
     {% for item in shared_equipment %}
     <a class="asset-row" href="{{ item.get_absolute_url }}?back={{ request.get_full_path|urlencode }}">
       <code>{{ item.internal_code|default:"без кода" }}</code>
-      <span><b>{{ item.name }}</b><small>{{ item.manufacturer }} {{ item.model }}{% if item.serial_number %} · SN: {{ item.serial_number }}{% endif %}</small></span>
+      <span><b>{{ item.name }}</b><small>{{ item.manufacturer }} {{ item.model }}{% if item.serial_number %} · SN: {{ item.serial_number }}{% endif %}{% if item.mac_address %} · MAC: {{ item.mac_address }}{% endif %}</small></span>
       <span class="badge">Общее место</span>
     </a>
     {% endfor %}

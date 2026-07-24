@@ -768,7 +768,7 @@ def location_detail(request, pk):
     if q:
         equipment = equipment.filter(
             Q(internal_code__icontains=q) | Q(name__icontains=q) | Q(manufacturer__icontains=q)
-            | Q(model__icontains=q) | Q(serial_number__icontains=q) | Q(network_address__icontains=q)
+            | Q(model__icontains=q) | Q(serial_number__icontains=q) | Q(mac_address__icontains=q) | Q(network_address__icontains=q)
             | Q(responsible_employee__full_name__icontains=q)
         )
     if group in dict(Equipment.AccountingGroup.choices):
@@ -890,7 +890,7 @@ def warehouse(request):
     category = request.GET.get("category", ""); group = request.GET.get("group", "")
     if q:
         qs = qs.filter(Q(internal_code__icontains=q) | Q(name__icontains=q) | Q(manufacturer__icontains=q)
-                       | Q(model__icontains=q) | Q(serial_number__icontains=q) | Q(hostname__icontains=q))
+                       | Q(model__icontains=q) | Q(serial_number__icontains=q) | Q(mac_address__icontains=q) | Q(hostname__icontains=q) | Q(network_address__icontains=q))
     if owner: qs = qs.filter(owner_id=owner)
     if category: qs = qs.filter(category_id=category)
     employee_count = qs.filter(accounting_group=Equipment.AccountingGroup.EMPLOYEE).count()
@@ -1009,7 +1009,7 @@ def equipment_list(request):
     status = request.GET.get("status", ""); group = request.GET.get("group", ""); location = request.GET.get("location", "")
     if q:
         qs = qs.filter(Q(internal_code__icontains=q) | Q(name__icontains=q) | Q(manufacturer__icontains=q)
-                       | Q(model__icontains=q) | Q(serial_number__icontains=q) | Q(hostname__icontains=q)
+                       | Q(model__icontains=q) | Q(serial_number__icontains=q) | Q(mac_address__icontains=q) | Q(hostname__icontains=q) | Q(network_address__icontains=q)
                        | Q(responsible_employee__full_name__icontains=q))
     if owner: qs = qs.filter(owner_id=owner)
     if category: qs = qs.filter(category_id=category)
@@ -1296,7 +1296,7 @@ def global_search(request):
     if q:
         equipment = Equipment.objects.filter(archived=False).filter(
             Q(internal_code__icontains=q) | Q(name__icontains=q) | Q(model__icontains=q)
-            | Q(serial_number__icontains=q) | Q(hostname__icontains=q)
+            | Q(serial_number__icontains=q) | Q(mac_address__icontains=q) | Q(hostname__icontains=q) | Q(network_address__icontains=q)
         ).select_related("category", "owner", "responsible_employee")[:20]
         employees = Employee.objects.filter(archived=False).filter(
             Q(full_name__icontains=q) | Q(position__icontains=q) | Q(phone__icontains=q)

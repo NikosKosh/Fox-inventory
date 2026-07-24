@@ -11,7 +11,7 @@ The application is designed for deployment on Ubuntu Server with Docker Compose.
 - Separate accounting groups for employee equipment and technical infrastructure.
 - Warehouse view for available equipment.
 - Facilities with rooms, employees, equipment, and network cabinets.
-- Individual equipment cards with serial numbers, internal codes, status, condition, location, credentials, and notes.
+- Individual equipment cards with serial numbers, MAC addresses, internal codes, status, condition, location, credentials, and notes.
 - Equipment issue and return workflows with or without a transfer document.
 - DOCX transfer document generation and signed PDF attachment storage.
 - Complete movement history linked to employees, equipment, and documents.
