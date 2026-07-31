@@ -1,11 +1,31 @@
 from pathlib import Path
 from django import forms
 from django.conf import settings
+from django.contrib.auth.forms import PasswordChangeForm
 from django.core.exceptions import ValidationError
 from django.db.models import Q
 from django.utils import timezone
 from .models import Act, Cabinet, Category, Employee, Equipment, EquipmentLoan, Location, Organization, RepairRecord, Room
 from .validators import normalize_mac_address
+
+
+class AccountPasswordChangeForm(PasswordChangeForm):
+    error_css_class = "field-error"
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        labels = {
+            "old_password": "Текущий пароль",
+            "new_password1": "Новый пароль",
+            "new_password2": "Повторите новый пароль",
+        }
+        for name, field in self.fields.items():
+            field.label = labels.get(name, field.label)
+            field.widget.attrs.update({
+                "class": "input",
+                "autocomplete": "current-password" if name == "old_password" else "new-password",
+            })
+
 
 
 class StyledModelForm(forms.ModelForm):

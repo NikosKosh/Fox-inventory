@@ -74,11 +74,19 @@ Important variables:
 | `CSRF_TRUSTED_ORIGINS` | Comma-separated trusted origins including scheme and port |
 | `POSTGRES_*` | PostgreSQL credentials |
 | `FIELD_ENCRYPTION_KEY` | Fernet key for encrypted network passwords |
+| `LOGIN_*` | Login-attempt limits, lockout duration, audit display size, and trusted proxy headers |
 | `ADMIN_USERNAME` | Initial administrator login |
-| `ADMIN_PASSWORD` | Initial administrator password |
+| `ADMIN_PASSWORD` | Initial administrator password; later changes are made in the account page |
 | `ACT_*` | Optional defaults for generated transfer documents |
 
 Secrets and uploaded documents must not be committed to Git. `.env`, `data/`, `media/`, and `backups/` are excluded by `.gitignore`.
+
+
+### Account security
+
+Authenticated users can change their own password on the **Account** page. The current password is required and Django password validators remain active. The same page shows recent login events. Superusers can review events for all accounts; other users see only their own username history.
+
+Failed logins are limited by the normalized username and client-IP pair, with a separate higher limit for the source IP across usernames. Default policy: five failures for one username from one IP or twenty failures from one IP during a fifteen-minute window, followed by a fifteen-minute lockout. Values are configurable through `LOGIN_*` variables. Repeated blocked requests are audit-throttled to prevent log flooding. When the application is behind a trusted reverse proxy, enable `LOGIN_TRUST_PROXY_HEADERS` so the audit records the original client address.
 
 ## Local development
 

@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import Act, Cabinet, Category, Employee, Equipment, EquipmentLoan, EquipmentMovement, Location, Organization, RepairRecord, Room
+from .models import Act, Cabinet, Category, Employee, Equipment, EquipmentLoan, EquipmentMovement, Location, LoginAttempt, Organization, RepairRecord, Room
 
 @admin.register(Organization)
 class OrganizationAdmin(admin.ModelAdmin):
@@ -21,3 +21,25 @@ class EquipmentAdmin(admin.ModelAdmin):
 admin.site.register([Location, Room, Cabinet, Category, EquipmentLoan, EquipmentMovement, Act, RepairRecord])
 admin.site.site_header = "FOX Inventory — администрирование"
 admin.site.site_title = "FOX Inventory"
+
+
+@admin.register(LoginAttempt)
+class LoginAttemptAdmin(admin.ModelAdmin):
+    list_display = ("created_at", "username", "user", "ip_address", "result", "short_user_agent")
+    list_filter = ("result", "created_at")
+    search_fields = ("username", "username_normalized", "ip_address", "user_agent")
+    readonly_fields = ("created_at", "username", "username_normalized", "user", "ip_address", "user_agent", "result", "reason")
+    ordering = ("-created_at",)
+
+    @admin.display(description="Браузер / клиент")
+    def short_user_agent(self, obj):
+        return obj.user_agent[:100]
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False

@@ -1,0 +1,106 @@
+{% extends "base.html" %}
+{% block title %}Личный кабинет — FOX Inventory{% endblock %}
+{% block content %}
+<div class="page-head refined-page-head account-page-head">
+  <div>
+    <h1>Личный кабинет</h1>
+    <p>Учетная запись, пароль и журнал входов</p>
+  </div>
+</div>
+
+<div class="account-grid">
+  <section class="card account-summary-card">
+    <div class="section-head">
+      <div>
+        <h2>Профиль</h2>
+        <p>Текущая учетная запись</p>
+      </div>
+    </div>
+    <dl class="details account-details">
+      <dt>Логин</dt><dd><strong>{{ user.get_username }}</strong></dd>
+      <dt>Права</dt><dd>{% if user.is_superuser %}Администратор{% elif user.is_staff %}Сотрудник с доступом к администрированию{% else %}Пользователь{% endif %}</dd>
+      <dt>Последний вход</dt><dd>{% if user.last_login %}{{ user.last_login|date:"d.m.Y H:i:s" }}{% else %}—{% endif %}</dd>
+    </dl>
+  </section>
+
+  <section class="card password-card">
+    <div class="section-head">
+      <div>
+        <h2>Смена пароля</h2>
+        <p>Потребуется действующий пароль</p>
+      </div>
+    </div>
+    <form method="post" class="form-stack password-change-form" novalidate>
+      {% csrf_token %}
+      {{ password_form.non_field_errors }}
+      {% for field in password_form %}
+        <label>
+          <span>{{ field.label }}</span>
+          {{ field }}
+          {% if field.help_text %}<small class="field-help">{{ field.help_text|safe }}</small>{% endif %}
+          {{ field.errors }}
+        </label>
+      {% endfor %}
+      <div class="form-actions">
+        <button class="btn primary" type="submit">Изменить пароль</button>
+      </div>
+    </form>
+  </section>
+</div>
+
+<section class="card security-policy-card">
+  <div class="section-head">
+    <div>
+      <h2>Защита входа</h2>
+      <p>Ограничение перебора паролей и фиксация событий</p>
+    </div>
+  </div>
+  <div class="security-stats">
+    <div><strong>{{ login_max_failures }}</strong><span>ошибок для логина с одного IP</span></div>
+    <div><strong>{{ login_ip_max_failures }}</strong><span>ошибок с одного IP</span></div>
+    <div><strong>{{ login_failure_window_minutes }} мин</strong><span>окно подсчета</span></div>
+    <div><strong>{{ login_lockout_minutes }} мин</strong><span>время блокировки</span></div>
+  </div>
+  <p class="security-policy-note">Успешный вход сбрасывает счетчик ошибок для этой пары логин/IP. Повторные запросы во время блокировки записываются в журнал, но не продлевают ее.</p>
+</section>
+
+<section class="card login-audit-card">
+  <div class="table-meta">
+    <div>
+      <b>Журнал входов</b>
+      <span>{% if user.is_superuser %}Последние события всех учетных записей{% else %}Последние события этой учетной записи{% endif %}</span>
+    </div>
+    <div class="audit-summary">
+      <span class="audit-count success">Успешно: {{ success_count }}</span>
+      <span class="audit-count failed">Ошибки: {{ failed_count }}</span>
+      <span class="audit-count blocked">Блокировки: {{ blocked_count }}</span>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table class="dense-table audit-table">
+      <thead>
+        <tr>
+          <th>Дата и время</th>
+          <th>Логин</th>
+          <th>Результат</th>
+          <th>IP-адрес</th>
+          <th>Браузер / клиент</th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for attempt in attempts %}
+        <tr>
+          <td>{{ attempt.created_at|date:"d.m.Y H:i:s" }}</td>
+          <td>{{ attempt.username|default:"—" }}</td>
+          <td><span class="login-result {{ attempt.result }}">{{ attempt.get_result_display }}</span>{% if attempt.reason %}<small>{{ attempt.reason }}</small>{% endif %}</td>
+          <td><code>{{ attempt.ip_address|default:"—" }}</code></td>
+          <td class="user-agent-cell" title="{{ attempt.user_agent }}">{{ attempt.user_agent|default:"—"|truncatechars:100 }}</td>
+        </tr>
+      {% empty %}
+        <tr><td colspan="5" class="empty-cell">Событий входа пока нет.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

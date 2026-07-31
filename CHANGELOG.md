@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.1.5
+
+- Added an account page with an authenticated password-change workflow.
+- Added a persistent login audit with username, result, IP address, timestamp, and user agent.
+- Added configurable brute-force protection for username/client-IP pairs and a separate source-IP limit.
+- Added reverse-proxy-aware client IP detection for Cloudflare and standard forwarding headers.
+- Added deduplication of repeated blocked events to prevent audit-log flooding.
+- Added a read-only login-attempt section in Django administration.
+- Changed the update script to invoke the backup script through Bash, avoiding executable-bit failures after Git checkout.
+- Added regression tests for logging, lockout, proxy IP handling, password changes, and log visibility.
+
 ## 1.1.4
 
 - Added a normalized MAC-address field to equipment cards.

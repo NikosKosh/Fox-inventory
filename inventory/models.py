@@ -301,6 +301,41 @@ class EquipmentMovement(models.Model):
         verbose_name_plural = "история оборудования"
 
 
+class LoginAttempt(models.Model):
+    class Result(models.TextChoices):
+        SUCCESS = "success", "Успешный вход"
+        FAILED = "failed", "Ошибка входа"
+        BLOCKED = "blocked", "Вход заблокирован"
+
+    username = models.CharField("Указанный логин", max_length=150, blank=True)
+    username_normalized = models.CharField("Нормализованный логин", max_length=150, blank=True, db_index=True)
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        verbose_name="Пользователь",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="inventory_login_attempts",
+    )
+    ip_address = models.GenericIPAddressField("IP-адрес", null=True, blank=True, db_index=True)
+    user_agent = models.CharField("Браузер / клиент", max_length=512, blank=True)
+    result = models.CharField("Результат", max_length=16, choices=Result.choices, db_index=True)
+    reason = models.CharField("Описание", max_length=255, blank=True)
+    created_at = models.DateTimeField("Дата и время", auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ["-created_at", "-pk"]
+        verbose_name = "попытка входа"
+        verbose_name_plural = "попытки входа"
+        indexes = [
+            models.Index(fields=["username_normalized", "ip_address", "result", "created_at"], name="login_user_ip_result_time"),
+            models.Index(fields=["ip_address", "result", "created_at"], name="login_ip_result_time"),
+        ]
+
+    def __str__(self):
+        return f"{self.get_result_display()}: {self.username or '—'} ({self.ip_address or 'IP не определён'})"
+
+
 class EquipmentLoan(TimeStampedModel):
     class Status(models.TextChoices):
         ACTIVE = "active", "Активна"

@@ -6,10 +6,13 @@
     <span class="brand-mark"><img src="{% static 'icons/favicon.svg' %}" alt=""></span>
     <div><h1><strong>FOX</strong> Inventory</h1><p>Учёт оборудования и актов</p></div>
   </div>
-  <form method="post" class="form-stack">{% csrf_token %}{{ form.non_field_errors }}
-    <label>Логин{{ form.username }}</label>
-    <label>Пароль{{ form.password }}</label>
+  <form method="post" class="form-stack" novalidate>{% csrf_token %}
+    {{ form.non_field_errors }}
+    {% if login_lockout %}<div class="login-lockout-notice">{{ login_lockout_message }}</div>{% endif %}
+    <label>Логин{{ form.username }}{{ form.username.errors }}</label>
+    <label>Пароль{{ form.password }}{{ form.password.errors }}</label>
     <button class="btn primary" type="submit">Войти</button>
   </form>
+  <p class="login-security-hint">После {{ login_max_failures }} неудачных попыток для логина с одного IP вход блокируется на {{ login_lockout_minutes }} минут.</p>
 </div>
 {% endblock %}

@@ -103,6 +103,25 @@ FIELD_ENCRYPTION_KEY = os.getenv("FIELD_ENCRYPTION_KEY", "")
 MAX_UPLOAD_MB = int(os.getenv("MAX_UPLOAD_MB", "25"))
 DATA_UPLOAD_MAX_MEMORY_SIZE = MAX_UPLOAD_MB * 1024 * 1024
 FILE_UPLOAD_MAX_MEMORY_SIZE = 5 * 1024 * 1024
+
+# Authentication audit and throttling. Username and IP limits are evaluated separately.
+LOGIN_MAX_FAILURES = max(1, int(os.getenv("LOGIN_MAX_FAILURES", "5")))
+LOGIN_IP_MAX_FAILURES = max(LOGIN_MAX_FAILURES, int(os.getenv("LOGIN_IP_MAX_FAILURES", "20")))
+LOGIN_FAILURE_WINDOW_MINUTES = max(1, int(os.getenv("LOGIN_FAILURE_WINDOW_MINUTES", "15")))
+LOGIN_LOCKOUT_MINUTES = max(1, int(os.getenv("LOGIN_LOCKOUT_MINUTES", "15")))
+LOGIN_LOG_DISPLAY_LIMIT = max(20, int(os.getenv("LOGIN_LOG_DISPLAY_LIMIT", "100")))
+LOGIN_BLOCKED_LOG_INTERVAL_SECONDS = max(1, int(os.getenv("LOGIN_BLOCKED_LOG_INTERVAL_SECONDS", "60")))
+LOGIN_TRUST_PROXY_HEADERS = os.getenv(
+    "LOGIN_TRUST_PROXY_HEADERS", os.getenv("TRUST_X_FORWARDED_PROTO", "0")
+) == "1"
+LOGIN_PROXY_IP_HEADERS = tuple(
+    item.strip()
+    for item in os.getenv(
+        "LOGIN_PROXY_IP_HEADERS",
+        "HTTP_CF_CONNECTING_IP,HTTP_X_FORWARDED_FOR,HTTP_X_REAL_IP",
+    ).split(",")
+    if item.strip()
+)
 SECURE_CONTENT_TYPE_NOSNIFF = True
 X_FRAME_OPTIONS = "SAMEORIGIN"
 SESSION_COOKIE_HTTPONLY = True

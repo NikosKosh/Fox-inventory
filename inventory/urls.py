@@ -1,9 +1,11 @@
 from django.urls import path
 from . import views
+from .auth_views import account_view
 
 urlpatterns = [
     path("", views.dashboard, name="dashboard"),
     path("search/", views.global_search, name="global_search"),
+    path("account/", account_view, name="account"),
     path("control/", views.control_center, name="control_center"),
     path("organizations/", views.organization_list, name="organization_list"),
     path("organizations/add/", views.organization_form, name="organization_add"),

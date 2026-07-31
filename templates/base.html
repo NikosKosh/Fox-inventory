@@ -40,6 +40,7 @@
           <a href="{% url 'category_list' %}">Категории</a>
           <a href="{% url 'archive_list' %}">Архив</a>
           <a href="{% url 'import' %}">Импорт</a>
+          <a href="{% url 'account' %}">Личный кабинет</a>
         </div>
       </details>
     </nav>
@@ -48,6 +49,11 @@
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m21 21-4.4-4.4m2.4-5.1a7.5 7.5 0 1 1-15 0 7.5 7.5 0 0 1 15 0Z"/></svg>
       <input type="search" name="q" value="{{ request.GET.q|default:'' }}" placeholder="Поиск" aria-label="Глобальный поиск">
     </form>
+
+    <a class="account-link {% if request.resolver_match.url_name == 'account' %}active{% endif %}" href="{% url 'account' %}" title="Личный кабинет">
+      <span class="account-avatar" aria-hidden="true">{{ user.get_username|slice:":1"|upper }}</span>
+      <span class="account-name">{{ user.get_username }}</span>
+    </a>
 
     <form class="logout-form" method="post" action="{% url 'logout' %}">{% csrf_token %}
       <button class="icon-button" type="submit" title="Выйти" aria-label="Выйти">
