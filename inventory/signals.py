@@ -1,6 +1,8 @@
-from django.db.models.signals import post_migrate
+from django.core.files.storage import default_storage
+from django.db import transaction
+from django.db.models.signals import post_delete, post_migrate
 from django.dispatch import receiver
-from .models import Category
+from .models import Act, Category
 
 DEFAULT_CATEGORIES = [
     ("Ноутбук", "N", "unit"),
@@ -25,3 +27,16 @@ def create_default_categories(sender, **kwargs):
         return
     for name, code, mode in DEFAULT_CATEGORIES:
         Category.objects.get_or_create(name=name, defaults={"code": code, "tracking_mode": mode})
+
+
+@receiver(post_delete, sender=Act)
+def delete_act_document_after_commit(sender, instance, **kwargs):
+    document_name = instance.document.name if instance.document else ""
+    if not document_name:
+        return
+
+    def remove_document():
+        if default_storage.exists(document_name):
+            default_storage.delete(document_name)
+
+    transaction.on_commit(remove_document)

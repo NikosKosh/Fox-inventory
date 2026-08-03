@@ -6,6 +6,7 @@ from django.contrib.auth.decorators import login_required
 from django.db import transaction
 from django.db.models import Count, F, Q, Value
 from django.db.models.functions import Coalesce, Lower
+from django.core.exceptions import PermissionDenied
 from django.core.paginator import Paginator
 from django.core.files.storage import default_storage
 from django.core.files.base import ContentFile
@@ -1218,6 +1219,73 @@ def act_detail(request, pk):
         "movements": _visible_movements(obj.movements.select_related("equipment", "from_employee", "to_employee")),
         "auto_download": request.GET.get("download") == "1",
     })
+
+
+def _ensure_staff(request):
+    if not request.user.is_staff:
+        raise PermissionDenied
+
+
+def _delete_acts(acts):
+    with transaction.atomic():
+        for act in acts:
+            act.delete()
+
+
+@login_required
+def act_delete(request, pk):
+    _ensure_staff(request)
+    obj = get_object_or_404(
+        Act.objects.select_related("employee", "from_organization", "to_organization")
+        .prefetch_related("equipment"),
+        pk=pk,
+    )
+    if request.method == "POST":
+        label = str(obj)
+        _delete_acts([obj])
+        messages.success(
+            request,
+            f"{label} удалён. Текущее закрепление оборудования и история операций не изменялись.",
+        )
+        return redirect("act_list")
+    return render(request, "inventory/act_confirm_delete.html", {
+        "objects": [obj],
+        "single_object": obj,
+        "bulk": False,
+    })
+
+
+@login_required
+@require_POST
+def act_bulk_delete(request):
+    _ensure_staff(request)
+    ids = []
+    for value in request.POST.getlist("acts"):
+        try:
+            ids.append(int(value))
+        except (TypeError, ValueError):
+            continue
+    acts = list(
+        Act.objects.filter(pk__in=ids)
+        .select_related("employee", "from_organization", "to_organization")
+        .prefetch_related("equipment")
+        .order_by("-act_date", "-created_at")
+    )
+    if not acts:
+        messages.warning(request, "Не выбрано ни одного акта.")
+        return redirect("act_list")
+    if request.POST.get("confirm") != "1":
+        return render(request, "inventory/act_confirm_delete.html", {
+            "objects": acts,
+            "bulk": True,
+        })
+    count = len(acts)
+    _delete_acts(acts)
+    messages.success(
+        request,
+        f"Удалено актов: {count}. Текущее закрепление оборудования и история операций не изменялись.",
+    )
+    return redirect("act_list")
 
 
 @login_required

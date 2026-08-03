@@ -41,7 +41,14 @@ class StyledModelForm(forms.ModelForm):
 class OrganizationForm(StyledModelForm):
     class Meta:
         model = Organization
-        fields = ["name", "short_name", "prefix", "kind", "archived", "notes"]
+        fields = [
+            "name", "short_name", "prefix", "kind",
+            "act_organization_name", "act_city",
+            "act_issue_representative_position", "act_issue_representative_name",
+            "act_return_representative_position", "act_return_representative_name",
+            "archived", "notes",
+        ]
+        widgets = {"notes": forms.Textarea(attrs={"rows": 4})}
 
     def clean_prefix(self):
         return self.cleaned_data["prefix"].strip().upper()
@@ -269,6 +276,34 @@ class RepairForm(StyledModelForm):
         widgets = {"opened_at": forms.DateInput(attrs={"type": "date"}), "closed_at": forms.DateInput(attrs={"type": "date"})}
 
 
+def _act_defaults_for_employee(employee, operation):
+    organization = employee.organization
+    if operation == "return":
+        position = (
+            organization.act_return_representative_position
+            or settings.ACT_RETURN_REPRESENTATIVE_POSITION
+        )
+        name = (
+            organization.act_return_representative_name
+            or settings.ACT_RETURN_REPRESENTATIVE_NAME
+        )
+    else:
+        position = (
+            organization.act_issue_representative_position
+            or settings.ACT_ISSUE_REPRESENTATIVE_POSITION
+        )
+        name = (
+            organization.act_issue_representative_name
+            or settings.ACT_ISSUE_REPRESENTATIVE_NAME
+        )
+    return {
+        "city": organization.act_city or settings.ACT_DEFAULT_CITY,
+        "organization_name": organization.act_organization_name or organization.name,
+        "representative_position": position,
+        "representative_name": name,
+    }
+
+
 class ImportForm(forms.Form):
     file = forms.FileField(label="Файл XLSX или CSV", widget=forms.FileInput(attrs={"class": "input", "accept": ".xlsx,.csv"}))
 
@@ -352,15 +387,10 @@ class EmployeeActDocumentForm(forms.Form):
         if not self.is_bound:
             self.initial["equipment"] = list(queryset.values_list("pk", flat=True))
         if not self.is_bound and employee is not None:
+            defaults = _act_defaults_for_employee(employee, act_type)
             self.fields["act_date"].initial = timezone.localdate()
-            self.fields["organization_name"].initial = employee.organization.name
-            self.fields["city"].initial = settings.ACT_DEFAULT_CITY
-            if act_type == "return":
-                self.fields["representative_position"].initial = settings.ACT_RETURN_REPRESENTATIVE_POSITION
-                self.fields["representative_name"].initial = settings.ACT_RETURN_REPRESENTATIVE_NAME
-            else:
-                self.fields["representative_position"].initial = settings.ACT_ISSUE_REPRESENTATIVE_POSITION
-                self.fields["representative_name"].initial = settings.ACT_ISSUE_REPRESENTATIVE_NAME
+            for field_name, value in defaults.items():
+                self.fields[field_name].initial = value
 
 
 class EmployeeEquipmentActWorkflowForm(forms.Form):
@@ -419,16 +449,12 @@ class EmployeeEquipmentActWorkflowForm(forms.Form):
         self.fields["equipment"].queryset = queryset
 
         if not self.is_bound and employee is not None:
+            defaults = _act_defaults_for_employee(employee, operation)
             self.fields["act_date"].initial = timezone.localdate()
-            self.fields["organization_name"].initial = employee.organization.name
-            self.fields["city"].initial = settings.ACT_DEFAULT_CITY
+            for field_name, value in defaults.items():
+                self.fields[field_name].initial = value
             if operation == "return":
-                self.fields["representative_position"].initial = settings.ACT_RETURN_REPRESENTATIVE_POSITION
-                self.fields["representative_name"].initial = settings.ACT_RETURN_REPRESENTATIVE_NAME
                 self.initial["equipment"] = list(queryset.values_list("pk", flat=True))
-            else:
-                self.fields["representative_position"].initial = settings.ACT_ISSUE_REPRESENTATIVE_POSITION
-                self.fields["representative_name"].initial = settings.ACT_ISSUE_REPRESENTATIVE_NAME
 
     def clean_equipment(self):
         equipment = self.cleaned_data["equipment"]

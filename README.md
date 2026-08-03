@@ -14,6 +14,8 @@ The application is designed for deployment on Ubuntu Server with Docker Compose.
 - Individual equipment cards with serial numbers, MAC addresses, internal codes, status, condition, location, credentials, and notes.
 - Equipment issue and return workflows with or without a transfer document.
 - DOCX transfer document generation and signed PDF attachment storage.
+- Per-organization defaults for document city, legal name, and issue/return representatives; every generated field remains editable.
+- Staff-only single and bulk document deletion with confirmation, without reverting equipment assignments or movement history.
 - Complete movement history linked to employees, equipment, and documents.
 - Temporary inter-organization transfers.
 - Excel and CSV import, Excel export.

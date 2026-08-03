@@ -27,6 +27,38 @@ class Organization(TimeStampedModel):
     short_name = models.CharField("Краткое наименование", max_length=100, blank=True)
     prefix = models.CharField("Префикс кодов", max_length=12, unique=True, help_text="Например: FOX или SZ")
     kind = models.CharField("Тип", max_length=20, choices=Kind.choices, default=Kind.COMPANY)
+    act_organization_name = models.CharField(
+        "Наименование организации в актах",
+        max_length=255,
+        blank=True,
+        help_text="Если не заполнено, используется основное наименование организации.",
+    )
+    act_city = models.CharField(
+        "Город в актах",
+        max_length=120,
+        blank=True,
+        help_text="Например: г. Ростов-на-Дону.",
+    )
+    act_issue_representative_position = models.CharField(
+        "Должность представителя при выдаче",
+        max_length=255,
+        blank=True,
+    )
+    act_issue_representative_name = models.CharField(
+        "ФИО представителя при выдаче",
+        max_length=255,
+        blank=True,
+    )
+    act_return_representative_position = models.CharField(
+        "Должность представителя при возврате",
+        max_length=255,
+        blank=True,
+    )
+    act_return_representative_name = models.CharField(
+        "ФИО представителя при возврате",
+        max_length=255,
+        blank=True,
+    )
     archived = models.BooleanField("В архиве", default=False)
     notes = models.TextField("Комментарий", blank=True)
 

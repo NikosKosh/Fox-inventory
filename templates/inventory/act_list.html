@@ -1,1 +1,81 @@
-{% extends "base.html" %}{% load inventory_ui %}{% block title %}Акты — FOX Inventory{% endblock %}{% block content %}<div class="page-head"><h1>Акты</h1><a class="btn primary" href="{% url 'act_add' %}">Загрузить акт</a></div><form class="filters auto-filter"><input class="input grow" type="search" name="q" value="{{ q }}" placeholder="Номер, сотрудник или код оборудования">{% if q %}<a class="btn" href="{% url 'act_list' %}">Сбросить</a>{% endif %}</form><section class="card"><div class="table-wrap"><table class="sortable-table"><thead><tr><th>{% sort_header "date" "Дата" "date" "desc" %}</th><th>{% sort_header "number" "Номер" "date" "desc" %}</th><th>{% sort_header "type" "Тип" "date" "desc" %}</th><th>{% sort_header "employee" "Сотрудник" "date" "desc" %}</th><th class="numeric-col">{% sort_header "equipment" "Оборудование" "date" "desc" %}</th><th>Документ</th></tr></thead><tbody>{% for o in objects %}<tr><td>{{ o.act_date|date:"d.m.Y" }}</td><td><a href="{{ o.get_absolute_url }}">{{ o.number|default:o.pk }}</a></td><td>{{ o.get_act_type_display }}</td><td>{{ o.employee|default:"—" }}</td><td class="numeric-col">{{ o.equipment_count }}</td><td><a href="{% url 'act_download' o.pk %}">Открыть</a></td></tr>{% empty %}<tr><td colspan="6">Актов нет.</td></tr>{% endfor %}</tbody></table></div></section>{% endblock %}
+{% extends "base.html" %}
+{% load inventory_ui %}
+{% block title %}Акты — FOX Inventory{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Акты</h1>
+    <p class="muted">Документы выдачи, возврата и передачи оборудования.</p>
+  </div>
+  <a class="btn primary" href="{% url 'act_add' %}">Загрузить акт</a>
+</div>
+<form class="filters auto-filter">
+  <input class="input grow" type="search" name="q" value="{{ q }}" placeholder="Номер, сотрудник или код оборудования">
+  {% if q %}<a class="btn" href="{% url 'act_list' %}">Сбросить</a>{% endif %}
+</form>
+<form method="post" action="{% url 'act_bulk_delete' %}" id="act-bulk-form">
+  {% csrf_token %}
+  {% if request.user.is_staff %}
+  <div class="selection-toolbar">
+    <button class="btn small" type="button" id="select-all-acts">Выбрать все</button>
+    <button class="btn small" type="button" id="clear-act-selection">Снять выбор</button>
+    <span class="muted" id="act-selection-count">Выбрано: 0</span>
+    <button class="btn danger small" type="submit" id="delete-selected-acts" disabled>Удалить выбранные</button>
+  </div>
+  {% endif %}
+  <section class="card compact-table-card">
+    <div class="table-wrap">
+      <table class="sortable-table dense-table">
+        <thead><tr>
+          {% if request.user.is_staff %}<th class="selection-col"><span class="sr-only">Выбор</span></th>{% endif %}
+          <th>{% sort_header "date" "Дата" "date" "desc" %}</th>
+          <th>{% sort_header "number" "Номер" "date" "desc" %}</th>
+          <th>{% sort_header "type" "Тип" "date" "desc" %}</th>
+          <th>{% sort_header "employee" "Сотрудник" "date" "desc" %}</th>
+          <th class="numeric-col">{% sort_header "equipment" "Оборудование" "date" "desc" %}</th>
+          <th>Документ</th>
+        </tr></thead>
+        <tbody>
+        {% for o in objects %}
+          <tr>
+            {% if request.user.is_staff %}<td class="selection-col"><input class="act-select" type="checkbox" name="acts" value="{{ o.pk }}" aria-label="Выбрать {{ o }}"></td>{% endif %}
+            <td>{{ o.act_date|date:"d.m.Y" }}</td>
+            <td><a href="{{ o.get_absolute_url }}">{{ o.number|default:o.pk }}</a></td>
+            <td>{{ o.get_act_type_display }}</td>
+            <td>{{ o.employee|default:"—" }}</td>
+            <td class="numeric-col">{{ o.equipment_count }}</td>
+            <td><a href="{% url 'act_download' o.pk %}">Открыть</a></td>
+          </tr>
+        {% empty %}
+          <tr><td colspan="{% if request.user.is_staff %}7{% else %}6{% endif %}">Актов нет.</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+</form>
+{% if request.user.is_staff %}
+<script>
+(() => {
+  const checkboxes = Array.from(document.querySelectorAll('.act-select'));
+  const count = document.getElementById('act-selection-count');
+  const deleteButton = document.getElementById('delete-selected-acts');
+  const update = () => {
+    const selected = checkboxes.filter((item) => item.checked).length;
+    count.textContent = `Выбрано: ${selected}`;
+    deleteButton.disabled = selected === 0;
+  };
+  document.getElementById('select-all-acts')?.addEventListener('click', () => {
+    checkboxes.forEach((item) => { item.checked = true; });
+    update();
+  });
+  document.getElementById('clear-act-selection')?.addEventListener('click', () => {
+    checkboxes.forEach((item) => { item.checked = false; });
+    update();
+  });
+  checkboxes.forEach((item) => item.addEventListener('change', update));
+  update();
+})();
+</script>
+{% endif %}
+{% endblock %}

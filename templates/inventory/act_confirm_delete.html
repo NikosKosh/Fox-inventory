@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}Удаление актов — FOX Inventory{% endblock %}
+{% block content %}
+<div class="page-head compact-head">
+  <div>
+    <a class="back-link" href="{% if single_object %}{{ single_object.get_absolute_url }}{% else %}{% url 'act_list' %}{% endif %}">← Отмена</a>
+    <h1>{% if bulk %}Удалить выбранные акты{% else %}Удалить акт{% endif %}</h1>
+    <p class="muted">Проверьте список перед окончательным удалением.</p>
+  </div>
+</div>
+<section class="card danger-zone">
+  <h2>Будет удалено актов: {{ objects|length }}</h2>
+  <p>Файлы документов и публичные ссылки будут удалены. Текущее закрепление оборудования и история операций останутся без изменений.</p>
+  <div class="table-wrap">
+    <table class="dense-table">
+      <thead><tr><th>Дата</th><th>Акт</th><th>Тип</th><th>Сотрудник</th><th>Оборудование</th></tr></thead>
+      <tbody>
+      {% for object in objects %}
+        <tr>
+          <td>{{ object.act_date|date:"d.m.Y" }}</td>
+          <td>{{ object.number|default:object.pk }}</td>
+          <td>{{ object.get_act_type_display }}</td>
+          <td>{{ object.employee|default:"—" }}</td>
+          <td>{{ object.equipment.count }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <form method="post" action="{% if bulk %}{% url 'act_bulk_delete' %}{% else %}{% url 'act_delete' single_object.pk %}{% endif %}" class="form-actions">
+    {% csrf_token %}
+    {% if bulk %}
+      {% for object in objects %}<input type="hidden" name="acts" value="{{ object.pk }}">{% endfor %}
+      <input type="hidden" name="confirm" value="1">
+    {% endif %}
+    <a class="btn" href="{% if single_object %}{{ single_object.get_absolute_url }}{% else %}{% url 'act_list' %}{% endif %}">Не удалять</a>
+    <button class="btn danger" type="submit">Удалить безвозвратно</button>
+  </form>
+</section>
+{% endblock %}
