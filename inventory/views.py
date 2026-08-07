@@ -1,4 +1,5 @@
 import mimetypes
+from datetime import timedelta
 from pathlib import Path
 from urllib.parse import quote
 from django.contrib import messages
@@ -21,7 +22,7 @@ from .forms import (
     EmployeeEquipmentActWorkflowForm, EmployeeEquipmentOperationForm, EmployeeForm, EquipmentForm, ImportForm, LoanForm,
     LocationForm, OrganizationForm, RepairForm, RoomForm, RoomEquipmentAssignForm,
 )
-from .models import Act, Cabinet, Category, Employee, Equipment, EquipmentLoan, EquipmentMovement, Location, Organization, RepairRecord, Room
+from .models import Act, Cabinet, Category, Contract, DocumentRecord, Employee, Equipment, EquipmentLoan, EquipmentMovement, Location, Organization, Reminder, RepairRecord, Room
 from .services import equipment_export_workbook, import_equipment, import_template_workbook
 from .documents import build_employee_transfer_docx, short_person_name
 
@@ -258,11 +259,29 @@ def dashboard(request):
             "employees": employees.count(),
             "equipment": equipment.count(),
         })
+    today = timezone.localdate()
+    dashboard_reminders = []
+    for reminder in Reminder.objects.filter(active=True).select_related("organization", "counterparty", "contract", "location").order_by("next_due_date", "pk"):
+        due = reminder.effective_due_date
+        visible_from = due - timedelta(days=reminder.remind_days_before)
+        if visible_from <= today:
+            dashboard_reminders.append({
+                "reminder": reminder,
+                "due": due,
+                "overdue": due < today,
+                "today": due == today,
+            })
+        if len(dashboard_reminders) >= 6:
+            break
+
     context.update({
         "equipment_total": Equipment.objects.filter(archived=False).count(),
         "employees_total": Employee.objects.filter(archived=False).count(),
         "organizations_total": Organization.objects.filter(archived=False).count(),
         "acts_total": Act.objects.count(),
+        "documents_total": DocumentRecord.objects.filter(trashed_at__isnull=True).count(),
+        "contracts_total": Contract.objects.filter(archived=False).count(),
+        "dashboard_reminders": dashboard_reminders,
         "locations_total": Location.objects.filter(archived=False).count(),
         "warehouse_employee_count": Equipment.objects.filter(
             archived=False, responsible_employee__isnull=True,
@@ -287,6 +306,8 @@ def organization_list(request):
     qs = Organization.objects.annotate(
         equipment_count=Count("owned_equipment", distinct=True),
         employee_count=Count("employees", distinct=True),
+        contract_count=Count("contracts", filter=Q(contracts__archived=False), distinct=True),
+        document_count=Count("document_records", filter=Q(document_records__trashed_at__isnull=True), distinct=True),
     )
     qs, sort, direction = _apply_sorting(qs, request, {
         "name": (Lower("name"),),
@@ -294,6 +315,8 @@ def organization_list(request):
         "kind": ("kind", Lower("name")),
         "employees": (F("employee_count"), Lower("name")),
         "equipment": (F("equipment_count"), Lower("name")),
+        "contracts": (F("contract_count"), Lower("name")),
+        "documents": (F("document_count"), Lower("name")),
     }, "name")
     return render(request, "inventory/organization_list.html", {"objects": qs, "sort": sort, "direction": direction})
 
@@ -742,7 +765,7 @@ def location_list(request):
 def location_detail(request, pk):
     obj = get_object_or_404(Location.objects.select_related("organization"), pk=pk)
     tab = request.GET.get("tab", "overview")
-    if tab not in {"overview", "employees", "rooms", "equipment", "history"}:
+    if tab not in {"overview", "employees", "rooms", "equipment", "documents", "history"}:
         tab = "overview"
     employees_qs = _employees_for_location(obj).select_related("organization", "workplace_location").annotate(
         equipment_count=Count("equipment", filter=Q(equipment__archived=False), distinct=True)
@@ -807,6 +830,10 @@ def location_detail(request, pk):
         EquipmentMovement.objects.filter(equipment_id__in=equipment_ids)
         .select_related("equipment", "from_employee", "to_employee", "act", "created_by")
     )[:60]
+    linked_contracts = obj.contracts.filter(archived=False).select_related("counterparty", "organization")
+    linked_documents = obj.document_records.filter(trashed_at__isnull=True).select_related(
+        "document_type", "counterparty", "contract", "organization"
+    )
     return render(request, "inventory/location_detail.html", {
         "object": obj, "tab": tab, "employees": employees_qs, "employee_cards": employee_cards,
         "equipment": equipment,
@@ -815,6 +842,7 @@ def location_detail(request, pk):
         "technical_count": equipment.filter(accounting_group=Equipment.AccountingGroup.TECHNICAL).count(),
         "employee_equipment_count": equipment.filter(accounting_group=Equipment.AccountingGroup.EMPLOYEE).count(),
         "rooms": rooms, "cabinets": cabinets, "history": history, "incomplete_count": incomplete_count,
+        "linked_contracts": linked_contracts, "linked_documents": linked_documents,
         "q": q, "employee_q": employee_q, "selected_group": group, "selected_status": status,
         "group_choices": Equipment.AccountingGroup.choices, "statuses": Equipment.UsageStatus.choices,
         "employee_sort": employee_sort, "employee_direction": employee_direction,
@@ -1045,6 +1073,7 @@ def equipment_detail(request, pk):
         "acts": obj.acts.select_related("employee").all(),
         "loans": obj.loans.select_related("borrower", "responsible_employee").all(),
         "repairs": obj.repairs.all(),
+        "documents": obj.document_records.filter(trashed_at__isnull=True).select_related("document_type", "counterparty", "contract", "organization"),
         "back_url": back_url,
     })
 
@@ -1360,7 +1389,7 @@ def equipment_preview(request, pk):
 @login_required
 def global_search(request):
     q = request.GET.get("q", "").strip()
-    equipment = employees = locations = rooms = acts = []
+    equipment = employees = locations = rooms = acts = contracts = documents = []
     if q:
         equipment = Equipment.objects.filter(archived=False).filter(
             Q(internal_code__icontains=q) | Q(name__icontains=q) | Q(model__icontains=q)
@@ -1376,8 +1405,16 @@ def global_search(request):
             Q(name__icontains=q) | Q(floor__icontains=q) | Q(location__label__icontains=q) | Q(location__address__icontains=q)
         ).select_related("location", "location__organization")[:10]
         acts = Act.objects.filter(Q(number__icontains=q) | Q(employee__full_name__icontains=q)).select_related("employee")[:10]
+        contracts = Contract.objects.filter(archived=False).filter(
+            Q(title__icontains=q) | Q(number__icontains=q) | Q(counterparty__name__icontains=q)
+        ).select_related("organization", "counterparty")[:10]
+        documents = DocumentRecord.objects.filter(trashed_at__isnull=True).filter(
+            Q(title__icontains=q) | Q(number__icontains=q) | Q(original_name__icontains=q)
+            | Q(counterparty__name__icontains=q) | Q(contract__title__icontains=q)
+        ).select_related("organization", "document_type", "counterparty", "contract")[:10]
     return render(request, "inventory/search_results.html", {
         "q": q, "equipment": equipment, "employees": employees, "locations": locations, "rooms": rooms, "acts": acts,
+        "contracts": contracts, "documents": documents,
     })
 
 

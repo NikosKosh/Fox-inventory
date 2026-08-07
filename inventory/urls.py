@@ -1,5 +1,6 @@
 from django.urls import path
 from . import views
+from . import documents_views
 from .auth_views import account_view
 
 urlpatterns = [
@@ -7,6 +8,33 @@ urlpatterns = [
     path("search/", views.global_search, name="global_search"),
     path("account/", account_view, name="account"),
     path("control/", views.control_center, name="control_center"),
+    path("documents/", documents_views.document_center, name="document_center"),
+    path("documents/all/", documents_views.document_list, name="document_list"),
+    path("documents/inbox/", documents_views.document_inbox, name="document_inbox"),
+    path("documents/upload/", documents_views.document_upload, name="document_upload"),
+    path("documents/trash/", documents_views.document_trash_list, name="document_trash_list"),
+    path("documents/types/", documents_views.document_type_list, name="document_type_list"),
+    path("documents/types/add/", documents_views.document_type_form, name="document_type_add"),
+    path("documents/types/<int:pk>/edit/", documents_views.document_type_form, name="document_type_edit"),
+    path("documents/<int:pk>/", documents_views.document_detail, name="document_detail"),
+    path("documents/<int:pk>/edit/", documents_views.document_edit, name="document_edit"),
+    path("documents/<int:pk>/download/", documents_views.document_download, name="document_download"),
+    path("documents/<int:pk>/trash/", documents_views.document_trash, name="document_trash"),
+    path("documents/<int:pk>/restore/", documents_views.document_restore, name="document_restore"),
+    path("documents/<int:pk>/delete/", documents_views.document_delete_permanently, name="document_delete_permanently"),
+    path("counterparties/", documents_views.counterparty_list, name="counterparty_list"),
+    path("counterparties/add/", documents_views.counterparty_form, name="counterparty_add"),
+    path("counterparties/<int:pk>/", documents_views.counterparty_detail, name="counterparty_detail"),
+    path("counterparties/<int:pk>/edit/", documents_views.counterparty_form, name="counterparty_edit"),
+    path("contracts/", documents_views.contract_list, name="contract_list"),
+    path("contracts/add/", documents_views.contract_form, name="contract_add"),
+    path("contracts/<int:pk>/", documents_views.contract_detail, name="contract_detail"),
+    path("contracts/<int:pk>/edit/", documents_views.contract_form, name="contract_edit"),
+    path("reminders/", documents_views.reminder_list, name="reminder_list"),
+    path("reminders/add/", documents_views.reminder_form, name="reminder_add"),
+    path("reminders/<int:pk>/edit/", documents_views.reminder_form, name="reminder_edit"),
+    path("reminders/<int:pk>/done/", documents_views.reminder_done, name="reminder_done"),
+    path("reminders/<int:pk>/snooze/", documents_views.reminder_snooze, name="reminder_snooze"),
     path("organizations/", views.organization_list, name="organization_list"),
     path("organizations/add/", views.organization_form, name="organization_add"),
     path("organizations/<int:pk>/edit/", views.organization_form, name="organization_edit"),

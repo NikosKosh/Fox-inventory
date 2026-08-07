@@ -30,6 +30,7 @@
       <a class="nav-item {% if request.resolver_match.url_name == 'employee_list' or request.resolver_match.url_name == 'employee_detail' %}active{% endif %}" href="{% url 'employee_list' %}">Сотрудники</a>
       <a class="nav-item {% if request.resolver_match.url_name == 'location_list' or request.resolver_match.url_name == 'location_detail' %}active{% endif %}" href="{% url 'location_list' %}">Объекты / адреса</a>
       <a class="nav-item {% if request.resolver_match.url_name == 'equipment_list' or request.resolver_match.url_name == 'equipment_detail' %}active{% endif %}" href="{% url 'equipment_list' %}">Оборудование</a>
+      <a class="nav-item {% if '/documents/' in request.path or '/contracts/' in request.path or '/counterparties/' in request.path or '/reminders/' in request.path %}active{% endif %}" href="{% url 'document_center' %}">Документы</a>
       <a class="nav-item attention-link {% if request.resolver_match.url_name == 'control_center' %}active{% endif %}" href="{% url 'control_center' %}">Контроль</a>
       <details class="nav-more">
         <summary>Ещё <span aria-hidden="true">⌄</span></summary>

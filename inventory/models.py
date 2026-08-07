@@ -6,7 +6,7 @@ from django.db.models import Q
 from django.urls import reverse
 from django.utils import timezone
 from .crypto import decrypt_text, encrypt_text
-from .validators import normalize_mac_address, validate_document, validate_mac_address
+from .validators import normalize_mac_address, validate_business_document, validate_document, validate_mac_address
 
 
 class TimeStampedModel(models.Model):
@@ -447,3 +447,250 @@ class RepairRecord(TimeStampedModel):
         ordering = ["-opened_at", "-created_at"]
         verbose_name = "ремонт"
         verbose_name_plural = "ремонты"
+
+
+def _document_org_segment(instance):
+    organization = getattr(instance, "organization", None)
+    if organization is None and getattr(instance, "contract_id", None):
+        organization = instance.contract.organization
+    if organization is None:
+        return "unassigned"
+    prefix = (organization.prefix or f"org-{organization.pk}").strip().lower()
+    return "".join(ch if ch.isalnum() or ch in {"-", "_"} else "-" for ch in prefix) or f"org-{organization.pk}"
+
+
+def contract_file_upload_to(instance, filename):
+    today = timezone.localdate()
+    return f"documents/{_document_org_segment(instance)}/contracts/{today:%Y/%m}/{filename}"
+
+
+def document_file_upload_to(instance, filename):
+    document_date = instance.document_date or timezone.localdate()
+    return f"documents/{_document_org_segment(instance)}/records/{document_date:%Y/%m}/{filename}"
+
+
+class Counterparty(TimeStampedModel):
+    name = models.CharField("Наименование", max_length=255)
+    short_name = models.CharField("Краткое наименование", max_length=150, blank=True)
+    inn = models.CharField("ИНН", max_length=20, blank=True, db_index=True)
+    kpp = models.CharField("КПП", max_length=20, blank=True)
+    contact_name = models.CharField("Контакт", max_length=255, blank=True)
+    phone = models.CharField("Телефон", max_length=80, blank=True)
+    email = models.EmailField("Email", blank=True)
+    notes = models.TextField("Комментарий", blank=True)
+    archived = models.BooleanField("В архиве", default=False)
+
+    class Meta:
+        ordering = ["name"]
+        verbose_name = "контрагент"
+        verbose_name_plural = "контрагенты"
+        indexes = [models.Index(fields=["name"], name="inventory_c_name_0cb663_idx")]
+
+    def __str__(self):
+        return self.short_name or self.name
+
+    def get_absolute_url(self):
+        return reverse("counterparty_detail", args=[self.pk])
+
+
+class Contract(TimeStampedModel):
+    class Category(models.TextChoices):
+        SERVICES = "services", "Услуги"
+        INTERNET = "internet", "Связь / интернет"
+        RENT = "rent", "Аренда"
+        SOFTWARE = "software", "ПО / лицензии"
+        SUPPLY = "supply", "Поставка"
+        MAINTENANCE = "maintenance", "Обслуживание"
+        OTHER = "other", "Прочее"
+
+    organization = models.ForeignKey(
+        Organization, verbose_name="Организация", on_delete=models.PROTECT, related_name="contracts"
+    )
+    counterparty = models.ForeignKey(
+        Counterparty, verbose_name="Контрагент", on_delete=models.PROTECT, related_name="contracts"
+    )
+    title = models.CharField("Название", max_length=255)
+    number = models.CharField("Номер договора", max_length=120, blank=True)
+    contract_date = models.DateField("Дата договора", null=True, blank=True)
+    category = models.CharField("Категория", max_length=30, choices=Category.choices, default=Category.OTHER)
+    starts_at = models.DateField("Начало действия", null=True, blank=True)
+    ends_at = models.DateField("Окончание действия", null=True, blank=True)
+    indefinite = models.BooleanField("Бессрочный", default=False)
+    location = models.ForeignKey(
+        Location, verbose_name="Объект", on_delete=models.SET_NULL, null=True, blank=True, related_name="contracts"
+    )
+    responsible_employee = models.ForeignKey(
+        Employee, verbose_name="Ответственный", on_delete=models.SET_NULL, null=True, blank=True, related_name="contracts"
+    )
+    main_file = models.FileField(
+        "Файл договора", upload_to=contract_file_upload_to, blank=True, validators=[validate_business_document]
+    )
+    notes = models.TextField("Комментарий", blank=True)
+    archived = models.BooleanField("В архиве", default=False, db_index=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, verbose_name="Создал", on_delete=models.SET_NULL, null=True, blank=True, related_name="created_contracts"
+    )
+
+    class Meta:
+        ordering = ["archived", "-contract_date", "counterparty__name", "title"]
+        verbose_name = "договор"
+        verbose_name_plural = "договоры"
+        indexes = [
+            models.Index(fields=["organization", "archived"], name="inventory_c_organiz_6da538_idx"),
+            models.Index(fields=["counterparty", "archived"], name="inventory_c_counter_f94ef6_idx"),
+        ]
+
+    def __str__(self):
+        number = f" №{self.number}" if self.number else ""
+        return f"{self.title}{number}"
+
+    def get_absolute_url(self):
+        return reverse("contract_detail", args=[self.pk])
+
+    @property
+    def status_label(self):
+        if self.archived:
+            return "Архив"
+        today = timezone.localdate()
+        if self.starts_at and self.starts_at > today:
+            return "Ожидает начала"
+        if not self.indefinite and self.ends_at and self.ends_at < today:
+            return "Срок истёк"
+        return "Действует"
+
+
+class DocumentType(TimeStampedModel):
+    name = models.CharField("Название", max_length=120, unique=True)
+    code = models.SlugField("Код", max_length=60, unique=True)
+    sort_order = models.PositiveIntegerField("Порядок", default=100)
+    archived = models.BooleanField("В архиве", default=False)
+
+    class Meta:
+        ordering = ["sort_order", "name"]
+        verbose_name = "тип документа"
+        verbose_name_plural = "типы документов"
+
+    def __str__(self):
+        return self.name
+
+
+class DocumentRecord(TimeStampedModel):
+    organization = models.ForeignKey(
+        Organization, verbose_name="Организация", on_delete=models.PROTECT, related_name="document_records"
+    )
+    document_type = models.ForeignKey(
+        DocumentType, verbose_name="Тип документа", on_delete=models.PROTECT, null=True, blank=True, related_name="documents"
+    )
+    counterparty = models.ForeignKey(
+        Counterparty, verbose_name="Контрагент", on_delete=models.SET_NULL, null=True, blank=True, related_name="documents"
+    )
+    contract = models.ForeignKey(
+        Contract, verbose_name="Договор", on_delete=models.SET_NULL, null=True, blank=True, related_name="documents"
+    )
+    location = models.ForeignKey(
+        Location, verbose_name="Объект", on_delete=models.SET_NULL, null=True, blank=True, related_name="document_records"
+    )
+    equipment = models.ManyToManyField(
+        Equipment, verbose_name="Оборудование", blank=True, related_name="document_records"
+    )
+    title = models.CharField("Название", max_length=255, blank=True)
+    number = models.CharField("Номер", max_length=120, blank=True)
+    document_date = models.DateField("Дата документа", null=True, blank=True, db_index=True)
+    amount = models.DecimalField("Сумма", max_digits=15, decimal_places=2, null=True, blank=True)
+    file = models.FileField("Файл", upload_to=document_file_upload_to, validators=[validate_business_document])
+    original_name = models.CharField("Исходное имя файла", max_length=255, blank=True)
+    notes = models.TextField("Комментарий", blank=True)
+    trashed_at = models.DateTimeField("В корзине с", null=True, blank=True, db_index=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, verbose_name="Загрузил", on_delete=models.SET_NULL, null=True, blank=True, related_name="uploaded_documents"
+    )
+
+    class Meta:
+        ordering = ["-document_date", "-created_at", "-pk"]
+        verbose_name = "документ"
+        verbose_name_plural = "документы"
+        indexes = [
+            models.Index(fields=["organization", "trashed_at"], name="inventory_d_organiz_21a46e_idx"),
+            models.Index(fields=["counterparty", "trashed_at"], name="inventory_d_counter_9f6952_idx"),
+            models.Index(fields=["contract", "trashed_at"], name="inv_doc_contract_trash_idx"),
+        ]
+
+    def __str__(self):
+        return self.display_title
+
+    @property
+    def display_title(self):
+        if self.title:
+            return self.title
+        label = self.document_type.name if self.document_type_id else "Документ"
+        if self.number:
+            label += f" №{self.number}"
+        return label
+
+    @property
+    def is_unclassified(self):
+        return self.document_type_id is None
+
+    def save(self, *args, **kwargs):
+        if self.file and not self.original_name:
+            self.original_name = self.file.name.rsplit("/", 1)[-1]
+        if self.contract_id:
+            self.organization_id = self.contract.organization_id
+            if not self.counterparty_id:
+                self.counterparty_id = self.contract.counterparty_id
+            if not self.location_id and self.contract.location_id:
+                self.location_id = self.contract.location_id
+        super().save(*args, **kwargs)
+
+    def get_absolute_url(self):
+        return reverse("document_detail", args=[self.pk])
+
+
+class Reminder(TimeStampedModel):
+    class Recurrence(models.TextChoices):
+        ONCE = "once", "Однократно"
+        MONTHLY = "monthly", "Ежемесячно"
+        YEARLY = "yearly", "Ежегодно"
+        INTERVAL = "interval", "Через заданное число дней"
+
+    title = models.CharField("Напоминание", max_length=255)
+    organization = models.ForeignKey(
+        Organization, verbose_name="Организация", on_delete=models.SET_NULL, null=True, blank=True, related_name="reminders"
+    )
+    counterparty = models.ForeignKey(
+        Counterparty, verbose_name="Контрагент", on_delete=models.SET_NULL, null=True, blank=True, related_name="reminders"
+    )
+    contract = models.ForeignKey(
+        Contract, verbose_name="Договор", on_delete=models.SET_NULL, null=True, blank=True, related_name="reminders"
+    )
+    location = models.ForeignKey(
+        Location, verbose_name="Объект", on_delete=models.SET_NULL, null=True, blank=True, related_name="reminders"
+    )
+    next_due_date = models.DateField("Дата", default=timezone.localdate, db_index=True)
+    remind_days_before = models.PositiveSmallIntegerField("Напомнить заранее, дней", default=0)
+    recurrence = models.CharField("Повтор", max_length=20, choices=Recurrence.choices, default=Recurrence.ONCE)
+    interval_days = models.PositiveIntegerField("Интервал, дней", null=True, blank=True)
+    amount = models.DecimalField("Сумма", max_digits=15, decimal_places=2, null=True, blank=True)
+    notes = models.TextField("Комментарий", blank=True)
+    snoozed_until = models.DateField("Отложено до", null=True, blank=True)
+    active = models.BooleanField("Активно", default=True, db_index=True)
+    last_completed_at = models.DateTimeField("Последнее выполнение", null=True, blank=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, verbose_name="Создал", on_delete=models.SET_NULL, null=True, blank=True, related_name="created_reminders"
+    )
+
+    class Meta:
+        ordering = ["next_due_date", "pk"]
+        verbose_name = "напоминание"
+        verbose_name_plural = "напоминания"
+        indexes = [models.Index(fields=["active", "next_due_date"], name="inventory_r_active_7541a8_idx")]
+
+    def __str__(self):
+        return self.title
+
+    def get_absolute_url(self):
+        return reverse("reminder_list")
+
+    @property
+    def effective_due_date(self):
+        return self.snoozed_until or self.next_due_date

@@ -1,0 +1,6 @@
+{% extends "base.html" %}
+{% block title %}{{ title }} — FOX Inventory{% endblock %}
+{% block content %}
+<a class="back-link" href="{{ cancel_url }}">← Назад</a><div class="page-head"><h1>{{ title }}</h1></div>{% include "inventory/documents/_nav.html" %}
+<section class="card"><form method="post" {% if multipart %}enctype="multipart/form-data"{% endif %} class="document-form">{% csrf_token %}{% if form.non_field_errors %}<div class="message error">{{ form.non_field_errors }}</div>{% endif %}<div class="form-grid">{% for field in form %}<label class="field {% if field.name == 'notes' or field.name == 'main_file' %}field-wide{% endif %}"><span>{{ field.label }}{% if field.field.required %} *{% endif %}</span>{{ field }}{% if field.help_text %}<small>{{ field.help_text }}</small>{% endif %}{% for error in field.errors %}<small class="error">{{ error }}</small>{% endfor %}</label>{% endfor %}</div><div class="actions"><button class="btn primary" type="submit">Сохранить</button><a class="btn" href="{{ cancel_url }}">Отмена</a></div></form></section>
+{% endblock %}

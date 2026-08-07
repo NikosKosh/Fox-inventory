@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}Документы — FOX Inventory{% endblock %}
+{% block content %}
+<div class="page-head"><div><h1>Документы</h1><p class="muted">Файлы можно классифицировать сразу или разобрать позже.</p></div><div class="actions"><a class="btn" href="{% url 'document_type_list' %}">Типы</a><a class="btn" href="{% url 'document_trash_list' %}">Корзина</a><a class="btn" href="{% url 'document_inbox' %}">Неразобранные</a><a class="btn primary" href="{% url 'document_upload' %}">+ Загрузить</a></div></div>
+{% include "inventory/documents/_nav.html" %}
+<form class="filters auto-filter document-filters" method="get">
+  <input class="input grow" type="search" name="q" value="{{ q }}" placeholder="Название, номер, файл, контрагент или договор">
+  <select class="input" name="organization"><option value="">Все организации</option>{% for org in organizations %}<option value="{{ org.pk }}" {% if selected_organization == org.pk|stringformat:'s' %}selected{% endif %}>{{ org }}</option>{% endfor %}</select>
+  <select class="input" name="type"><option value="">Все типы</option><option value="inbox" {% if selected_type == 'inbox' %}selected{% endif %}>Неразобранные</option>{% for type in document_types %}<option value="{{ type.pk }}" {% if selected_type == type.pk|stringformat:'s' %}selected{% endif %}>{{ type.name }}</option>{% endfor %}</select>
+  <select class="input" name="counterparty"><option value="">Все контрагенты</option>{% for cp in counterparties %}<option value="{{ cp.pk }}" {% if selected_counterparty == cp.pk|stringformat:'s' %}selected{% endif %}>{{ cp }}</option>{% endfor %}</select>
+  <select class="input" name="contract"><option value="">Все договоры</option>{% for c in contracts %}<option value="{{ c.pk }}" {% if selected_contract == c.pk|stringformat:'s' %}selected{% endif %}>{{ c.organization }} · {{ c.title }}</option>{% endfor %}</select>
+  <select class="input" name="year"><option value="">Все годы</option>{% for d in years %}<option value="{{ d|date:'Y' }}" {% if selected_year == d|date:'Y' %}selected{% endif %}>{{ d|date:'Y' }}</option>{% endfor %}</select>
+  {% if q or selected_organization or selected_type or selected_counterparty or selected_contract or selected_year %}<a class="btn" href="{% url 'document_list' %}">Сбросить</a>{% endif %}
+</form>
+<section class="card compact-table-card"><div class="table-wrap"><table class="dense-table"><thead><tr><th>Дата</th><th>Тип</th><th>Документ</th><th>Организация</th><th>Контрагент</th><th>Договор</th><th class="numeric-col">Сумма</th></tr></thead><tbody>
+{% for item in objects %}<tr><td>{{ item.document_date|date:"d.m.Y"|default:"—" }}</td><td>{% if item.document_type %}<span class="doc-type-badge">{{ item.document_type }}</span>{% else %}<span class="doc-type-badge inbox">Неразобранное</span>{% endif %}</td><td><a href="{{ item.get_absolute_url }}"><b>{{ item.display_title }}</b></a><small>{{ item.original_name }}</small></td><td><span class="org-chip">{{ item.organization }}</span></td><td>{{ item.counterparty|default:"—" }}</td><td>{% if item.contract %}<a href="{{ item.contract.get_absolute_url }}">{{ item.contract.title }}</a>{% else %}—{% endif %}</td><td class="numeric-col">{% if item.amount %}{{ item.amount }} ₽{% else %}—{% endif %}</td></tr>{% empty %}<tr><td colspan="7">Документы не найдены.</td></tr>{% endfor %}
+</tbody></table></div></section>
+{% if page_obj.has_other_pages %}<nav class="pagination">{% if page_obj.has_previous %}<a href="?{% if query_string %}{{ query_string }}&{% endif %}page={{ page_obj.previous_page_number }}">←</a>{% endif %}<span>{{ page_obj.number }} / {{ page_obj.paginator.num_pages }}</span>{% if page_obj.has_next %}<a href="?{% if query_string %}{{ query_string }}&{% endif %}page={{ page_obj.next_page_number }}">→</a>{% endif %}</nav>{% endif %}
+{% endblock %}

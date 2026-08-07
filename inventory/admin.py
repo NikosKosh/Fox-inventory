@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import Act, Cabinet, Category, Employee, Equipment, EquipmentLoan, EquipmentMovement, Location, LoginAttempt, Organization, RepairRecord, Room
+from .models import Act, Cabinet, Category, Contract, Counterparty, DocumentRecord, DocumentType, Employee, Equipment, EquipmentLoan, EquipmentMovement, Location, LoginAttempt, Organization, Reminder, RepairRecord, Room
 
 @admin.register(Organization)
 class OrganizationAdmin(admin.ModelAdmin):
@@ -18,7 +18,7 @@ class EquipmentAdmin(admin.ModelAdmin):
     list_filter = ("category", "owner", "usage_status", "condition", "archived")
     search_fields = ("internal_code", "name", "manufacturer", "model", "serial_number", "mac_address", "hostname", "network_address")
 
-admin.site.register([Location, Room, Cabinet, Category, EquipmentLoan, EquipmentMovement, Act, RepairRecord])
+admin.site.register([Location, Room, Cabinet, Category, EquipmentLoan, EquipmentMovement, Act, RepairRecord, Counterparty, Contract, DocumentType, DocumentRecord, Reminder])
 admin.site.site_header = "FOX Inventory — администрирование"
 admin.site.site_title = "FOX Inventory"
 

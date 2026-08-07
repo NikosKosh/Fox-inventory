@@ -1,6 +1,6 @@
 # FOX Inventory
 
-FOX Inventory is a self-hosted equipment accounting system for organizations, employees, warehouses, facilities, rooms, network cabinets, transfer documents, and movement history.
+FOX Inventory is a self-hosted equipment and document accounting system for organizations, employees, warehouses, facilities, rooms, network cabinets, contracts, business documents, reminders, transfer documents, and movement history.
 
 The application is designed for deployment on Ubuntu Server with Docker Compose. The interface and generated documents are localized in Russian.
 
@@ -15,6 +15,9 @@ The application is designed for deployment on Ubuntu Server with Docker Compose.
 - Equipment issue and return workflows with or without a transfer document.
 - DOCX transfer document generation and signed PDF attachment storage.
 - Per-organization defaults for document city, legal name, and issue/return representatives; every generated field remains editable.
+- Document center with organization-aware storage, counterparties, contracts, document types, unclassified uploads, search, filters, and trash.
+- Optional links from business documents to contracts, facilities, and equipment.
+- User-created one-time and recurring reminders for payments, renewals, and other dates without mandatory accounting workflows.
 - Staff-only single and bulk document deletion with confirmation, without reverting equipment assignments or movement history.
 - Complete movement history linked to employees, equipment, and documents.
 - Temporary inter-organization transfers.
