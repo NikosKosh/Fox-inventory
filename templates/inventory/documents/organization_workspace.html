@@ -5,88 +5,247 @@
 
 <div class="page-head document-party-head">
   <div>
-    <span class="eyebrow">Документы / Организация</span>
-    <h1>{{ organization }}</h1>
-    <p class="muted">Договоры, операции и документы, в которых организация является одной из сторон.</p>
+    <span class="eyebrow">Документы / {{ organization }}</span>
+    <h1>{% if selected_party %}{{ organization }} ↔ {{ selected_party.name }}{% else %}{{ organization }}{% endif %}</h1>
+    <p class="muted">
+      {% if selected_party %}
+        Вы смотрите документооборот от лица {{ organization }}. Ниже только документы этой пары сторон.
+      {% else %}
+        Сначала выберите вторую сторону. После этого договоры, операции и документы будут показаны как единая структура.
+      {% endif %}
+    </p>
   </div>
+  {% if selected_party %}
   <div class="actions">
-    <a class="btn" href="{% url 'operation_add' %}?organization={{ organization.pk }}">+ Операция</a>
-    <a class="btn" href="{% url 'contract_add' %}?organization={{ organization.pk }}">+ Договор</a>
-    <a class="btn primary" href="{% url 'document_upload' %}?organization={{ organization.pk }}">+ Документ</a>
+    <a class="btn" href="{% url 'contract_add' %}?organization={{ organization.pk }}{% if selected_party.form_counterparty_id %}&counterparty={{ selected_party.form_counterparty_id }}{% endif %}">+ Договор</a>
+    <a class="btn" href="{% url 'operation_add' %}?organization={{ organization.pk }}{% if selected_party.form_counterparty_id %}&counterparty={{ selected_party.form_counterparty_id }}{% endif %}">+ Операция</a>
+    <a class="btn primary" href="{% url 'document_upload' %}?organization={{ organization.pk }}{% if selected_party.form_counterparty_id %}&counterparty={{ selected_party.form_counterparty_id }}{% endif %}">+ Документ</a>
   </div>
+  {% endif %}
 </div>
 
-<div class="document-context-bar">
-  <span>Организация</span>
-  <select class="input" onchange="if(this.value){window.location=this.value;}">
-    {% for item in organizations %}
-      <option value="{% url 'organization_document_workspace' item.pk %}" {% if item.pk == organization.pk %}selected{% endif %}>{{ item }}</option>
+<div class="relationship-context">
+  <label class="context-field">
+    <span>От лица организации</span>
+    <select class="input" onchange="if(this.value){window.location=this.value;}">
+      {% for item in organizations %}
+        <option value="{% url 'organization_document_workspace' item.pk %}" {% if item.pk == organization.pk %}selected{% endif %}>{{ item }}</option>
+      {% endfor %}
+    </select>
+  </label>
+
+  <span class="relationship-context-arrow">↔</span>
+
+  <label class="context-field grow">
+    <span>Контрагент / вторая сторона</span>
+    <select class="input" onchange="if(this.value){window.location=this.value;}">
+      <option value="{% url 'organization_document_workspace' organization.pk %}" {% if not selected_party %}selected{% endif %}>Выберите контрагента</option>
+      {% for party in party_options %}
+        <option value="{{ party.href }}" {% if selected_party and party.key == selected_party.key %}selected{% endif %}>{{ party.name }}{% if party.internal %} · наша организация{% endif %}</option>
+      {% endfor %}
+    </select>
+  </label>
+
+  {% if selected_party %}
+    <a class="btn small" href="{% url 'organization_document_workspace' organization.pk %}">Все контрагенты</a>
+  {% endif %}
+</div>
+
+{% if not selected_party %}
+  <div class="stats document-stats">
+    <div class="stat"><b>{{ operations_total }}</b><span>операций</span></div>
+    <div class="stat"><b>{{ contracts_total }}</b><span>договоров</span></div>
+    <div class="stat"><b>{{ documents_total }}</b><span>документов</span></div>
+    <div class="stat"><b>{{ parties_total }}</b><span>сторон</span></div>
+  </div>
+
+  <section class="card party-picker-card">
+    <div class="section-head">
+      <div>
+        <h2>С кем работаем?</h2>
+        <p class="muted">Выберите сторону — система уберёт всё лишнее и покажет только её договоры и связанные пакеты документов.</p>
+      </div>
+    </div>
+
+    <div class="party-picker-search">
+      <input class="input" id="party-search" type="search" placeholder="Найти контрагента по названию">
+    </div>
+
+    <div class="party-choice-grid" id="party-grid">
+      {% for party in party_options %}
+        <a class="party-choice-card" href="{{ party.href }}" data-party-name="{{ party.name|lower }}">
+          <div class="party-choice-top">
+            <span class="party-choice-avatar">{{ party.initials }}</span>
+            <span class="party-choice-name">
+              <b>{{ party.name }}</b>
+              {% if party.internal %}<small class="internal-party-badge">Наша организация</small>{% else %}<small>Контрагент</small>{% endif %}
+            </span>
+            <span class="party-choice-open">→</span>
+          </div>
+          <div class="party-choice-stats">
+            <span><b>{{ party.contract_count }}</b> договоров</span>
+            <span><b>{{ party.operation_count }}</b> операций</span>
+            <span><b>{{ party.document_count }}</b> документов</span>
+          </div>
+          {% if party.last_date %}<small class="party-choice-activity">Последняя активность: {{ party.last_date|date:"d.m.Y" }}</small>{% endif %}
+        </a>
+      {% empty %}
+        <p class="muted">У этой организации пока нет связанных контрагентов и документов.</p>
+      {% endfor %}
+    </div>
+  </section>
+
+  <script>
+  (function () {
+    const input = document.getElementById("party-search");
+    if (!input) return;
+    const cards = Array.from(document.querySelectorAll("[data-party-name]"));
+    input.addEventListener("input", function () {
+      const q = input.value.trim().toLowerCase();
+      cards.forEach(function (card) {
+        card.hidden = q && !card.dataset.partyName.includes(q);
+      });
+    });
+  })();
+  </script>
+{% else %}
+  <section class="relationship-hero">
+    <div class="relationship-side active-side">
+      <small>Вы смотрите от лица</small>
+      <b>{{ organization }}</b>
+    </div>
+    <div class="relationship-route-arrow">↔</div>
+    <div class="relationship-side">
+      <small>{% if selected_party.internal %}Наша организация{% else %}Контрагент{% endif %}</small>
+      <b>{{ selected_party.name }}</b>
+      {% if selected_party.internal and selected_party.organization_id %}
+        <a href="{% url 'organization_document_workspace' selected_party.organization_id %}">Открыть от её лица →</a>
+      {% endif %}
+    </div>
+  </section>
+
+  <div class="stats document-stats relationship-stats">
+    <div class="stat"><b>{{ selected_operations_total }}</b><span>операций</span></div>
+    <div class="stat"><b>{{ selected_contracts_total }}</b><span>договоров</span></div>
+    <div class="stat"><b>{{ selected_documents_total }}</b><span>документов</span></div>
+    <div class="stat"><b>{{ selected_reminders_total }}</b><span>напоминаний</span></div>
+  </div>
+
+  <section class="relationship-flow">
+    <div class="section-head relationship-flow-head">
+      <div>
+        <span class="eyebrow">Структура отношений</span>
+        <h2>Договоры → операции → документы</h2>
+        <p class="muted">Документы договора и документы исполнения больше не смешиваются в одну таблицу.</p>
+      </div>
+    </div>
+
+    {% for group in contract_groups %}
+      <article class="relationship-contract-card">
+        <header class="relationship-contract-head">
+          <div>
+            <span class="eyebrow">{{ group.contract.get_category_display }}</span>
+            <h3>{{ group.contract }}</h3>
+            <p class="muted">
+              {% if group.contract.contract_date %}от {{ group.contract.contract_date|date:"d.m.Y" }}{% endif %}
+              {% if group.contract.location %} · {{ group.contract.location }}{% endif %}
+            </p>
+          </div>
+          <div class="relationship-contract-actions">
+            <span class="badge">{{ group.contract.status_label }}</span>
+            <a class="btn small" href="{{ group.contract.get_absolute_url }}?view={{ organization.pk }}">Открыть договор</a>
+          </div>
+        </header>
+
+        <div class="relationship-contract-body">
+          <div class="relationship-column contract-documents-column">
+            <div class="relationship-column-head">
+              <div><h4>Документы договора</h4><small>Условия и приложения, а не исполнение.</small></div>
+              <span class="count-pill">{{ group.contract_document_count }}</span>
+            </div>
+
+            {% if group.contract.main_file %}
+              <a class="relationship-doc-row main-contract-file" href="{{ group.contract.main_file.url }}">
+                <span class="relationship-doc-icon">Д</span>
+                <span><b>Основной файл договора</b><small>{{ group.contract }}</small></span>
+                <span>Открыть</span>
+              </a>
+            {% endif %}
+
+            {% for item in group.documents %}
+              <a class="relationship-doc-row" href="{{ item.get_absolute_url }}">
+                <span class="relationship-doc-icon">{{ item.document_type.name|slice:":1"|default:"Д" }}</span>
+                <span><b>{{ item.display_title }}</b><small>{{ item.document_type|default:"Документ" }} · {{ item.original_name }}</small></span>
+                <span>{{ item.document_date|date:"d.m.Y"|default:"—" }}</span>
+              </a>
+            {% empty %}
+              {% if not group.contract.main_file %}<p class="relationship-empty">Отдельных документов договора нет.</p>{% endif %}
+            {% endfor %}
+          </div>
+
+          <div class="relationship-column operations-column">
+            <div class="relationship-column-head">
+              <div><h4>Операции</h4><small>Каждая операция — один законченный пакет.</small></div>
+              <span class="count-pill">{{ group.operation_count }}</span>
+            </div>
+
+            {% for operation in group.operations %}
+              <a class="relationship-operation-row" href="{{ operation.object.get_absolute_url }}?view={{ organization.pk }}">
+                <span class="operation-date-block">
+                  {% if operation.object.operation_date %}
+                    <b>{{ operation.object.operation_date|date:"d" }}</b>
+                    <small>{{ operation.object.operation_date|date:"m.Y" }}</small>
+                  {% else %}
+                    <b>—</b><small>без даты</small>
+                  {% endif %}
+                </span>
+                <span class="relationship-operation-main">
+                  <b>{{ operation.object.title }}</b>
+                  <small>{{ operation.document_count }} документов{% if operation.object.amount %} · {{ operation.object.amount }} ₽{% endif %}</small>
+                </span>
+                <span class="relationship-operation-open">→</span>
+              </a>
+            {% empty %}
+              <p class="relationship-empty">Исполнение по договору ещё не сгруппировано в операции.</p>
+            {% endfor %}
+          </div>
+        </div>
+      </article>
+    {% empty %}
+      <section class="card">
+        <h3>Договоров между этими сторонами нет</h3>
+        <p class="muted">Это нормально: разовая закупка или услуга может оформляться без отдельной карточки договора.</p>
+      </section>
     {% endfor %}
-  </select>
-  <a href="{% url 'document_center' %}">Все организации</a>
-</div>
-
-<div class="stats document-stats">
-  <div class="stat"><b>{{ operations_total }}</b><span>операций</span></div>
-  <a class="stat" href="{% url 'contract_list' %}?organization={{ organization.pk }}"><b>{{ contracts_total }}</b><span>договоров</span></a>
-  <a class="stat" href="{% url 'document_list' %}?organization={{ organization.pk }}"><b>{{ documents_total }}</b><span>документов</span></a>
-  <a class="stat" href="{% url 'reminder_list' %}?organization={{ organization.pk }}"><b>{{ reminders_total }}</b><span>напоминаний</span></a>
-</div>
-
-<section class="card">
-  <div class="section-head">
-    <div><h2>Договоры</h2><p class="muted">Основной договор — верхний уровень. Допсоглашения и приложения остаются документами договора, операции идут отдельными пакетами.</p></div>
-    <a href="{% url 'contract_list' %}?organization={{ organization.pk }}">Все договоры</a>
-  </div>
-  <div class="party-contract-grid">
-    {% for item in contracts %}
-      <a class="party-contract-card" href="{{ item.get_absolute_url }}">
-        <div class="party-contract-sides">
-          {% if item.organization_id == organization.pk %}
-            <span class="party-side active">{{ organization }}</span><span class="party-arrow">↔</span><span class="party-side">{{ item.counterparty }}</span>
-          {% else %}
-            <span class="party-side active">{{ organization }}</span><span class="party-arrow">↔</span><span class="party-side">{{ item.organization }}</span>
-          {% endif %}
-        </div>
-        <div class="party-contract-title"><b>{{ item.title }}</b><small>{% if item.number %}№{{ item.number }}{% endif %}{% if item.contract_date %} · {{ item.contract_date|date:"d.m.Y" }}{% endif %}</small></div>
-        <div class="party-contract-meta"><span>{{ item.operation_count }} операций</span><span>{{ item.document_count }} документов</span><span class="badge">{{ item.status_label }}</span></div>
-      </a>
-    {% empty %}<p class="muted">Договоров для этой организации пока нет.</p>{% endfor %}
-  </div>
-</section>
-
-<section class="card">
-  <div class="section-head">
-    <div><h2>Операции</h2><p class="muted">Одна карточка — один смысловой пакет документов.</p></div>
-    <a class="btn small" href="{% url 'operation_add' %}?organization={{ organization.pk }}">+ Операция</a>
-  </div>
-  <div class="operation-grid">
-    {% for item in operations %}
-      <a class="operation-card" href="{{ item.get_absolute_url }}">
-        <div class="operation-card-date">{{ item.operation_date|date:"d.m.Y"|default:"Без даты" }}</div>
-        <div class="operation-card-main">
-          <b>{{ item.title }}</b>
-          <small>{% if item.contract %}{{ item.contract }}{% elif item.counterparty %}{{ item.counterparty }} · без договора{% else %}Без договора{% endif %}</small>
-        </div>
-        <div class="operation-card-count"><b>{{ item.document_count }}</b><span>док.</span></div>
-      </a>
-    {% empty %}<p class="muted">Операций пока нет.</p>{% endfor %}
-  </div>
-</section>
-
-<div class="grid two">
-  <section class="card">
-    <div class="section-head"><div><h2>Документы вне операций</h2><p class="muted">Договоры, допсоглашения, приложения и файлы, которые ещё не объединены в пакет.</p></div><a href="{% url 'document_list' %}?organization={{ organization.pk }}">Все документы</a></div>
-    {% for item in ungrouped_documents %}
-      <a class="row-link" href="{{ item.get_absolute_url }}"><span><b>{{ item.display_title }}</b><small>{{ item.document_type|default:"Документ" }}{% if item.contract %} · {{ item.contract }}{% endif %}</small></span><small>{{ item.document_date|date:"d.m.Y"|default:"—" }}</small></a>
-    {% empty %}<p class="muted">Все операционные документы сгруппированы.</p>{% endfor %}
   </section>
 
-  <section class="card">
-    <div class="section-head"><div><h2>Без договора</h2><p class="muted">Операции и документы, которые не требуют карточки договора.</p></div></div>
-    {% for item in no_contract_operations %}
-      <a class="row-link" href="{{ item.get_absolute_url }}"><span><b>{{ item.title }}</b><small>{{ item.counterparty|default:"Без контрагента" }}</small></span><small>{{ item.document_count }} док.</small></a>
-    {% empty %}<p class="muted">Операций без договора нет.</p>{% endfor %}
+  {% if no_contract_operations or no_contract_documents %}
+  <section class="card no-contract-zone">
+    <div class="section-head">
+      <div>
+        <h2>Без договора</h2>
+        <p class="muted">Разовые покупки, услуги и другие операции, для которых отдельный договор не нужен.</p>
+      </div>
+    </div>
+
+    {% for operation in no_contract_operations %}
+      <a class="relationship-operation-row standalone" href="{{ operation.object.get_absolute_url }}?view={{ organization.pk }}">
+        <span class="operation-date-block">
+          {% if operation.object.operation_date %}<b>{{ operation.object.operation_date|date:"d" }}</b><small>{{ operation.object.operation_date|date:"m.Y" }}</small>{% else %}<b>—</b><small>без даты</small>{% endif %}
+        </span>
+        <span class="relationship-operation-main"><b>{{ operation.object.title }}</b><small>{{ operation.document_count }} документов</small></span>
+        <span class="relationship-operation-open">→</span>
+      </a>
+    {% endfor %}
+
+    {% for item in no_contract_documents %}
+      <a class="relationship-doc-row standalone" href="{{ item.get_absolute_url }}">
+        <span class="relationship-doc-icon">{{ item.document_type.name|slice:":1"|default:"Д" }}</span>
+        <span><b>{{ item.display_title }}</b><small>{{ item.document_type|default:"Документ" }} · вне операции</small></span>
+        <span>{{ item.document_date|date:"d.m.Y"|default:"—" }}</span>
+      </a>
+    {% endfor %}
   </section>
-</div>
+  {% endif %}
+{% endif %}
 {% endblock %}

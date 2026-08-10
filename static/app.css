@@ -385,3 +385,45 @@ a{color:inherit}
   .operation-document-row{grid-template-columns:1fr}
   .operation-document-row>.numeric-col{text-align:left}
 }
+
+/* FOX Inventory 1.2.3 — relationship-first document workspace */
+.relationship-context{display:flex;align-items:end;gap:12px;padding:14px 16px;margin:0 0 16px;border:1px solid var(--border);border-radius:14px;background:var(--surface-2)}
+.context-field{display:flex;flex-direction:column;gap:6px;min-width:230px}.context-field.grow{flex:1}.context-field>span{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:700}
+.relationship-context-arrow{padding:0 2px 11px;color:var(--accent);font-size:18px;font-weight:700}
+.party-picker-card{overflow:hidden}.party-picker-search{margin:0 0 14px}.party-picker-search .input{width:100%;max-width:520px}
+.party-choice-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(310px,1fr));gap:12px}
+.party-choice-card{display:flex;flex-direction:column;gap:13px;padding:16px;border:1px solid var(--border);border-radius:14px;background:var(--surface-2);color:inherit;text-decoration:none;transition:border-color .15s ease,transform .15s ease}
+.party-choice-card:hover{border-color:var(--accent);transform:translateY(-1px)}
+.party-choice-top{display:grid;grid-template-columns:42px 1fr auto;gap:11px;align-items:center}
+.party-choice-avatar{display:grid;place-items:center;width:42px;height:42px;border-radius:12px;background:var(--accent-soft);color:var(--accent);font-size:13px;font-weight:800;text-transform:uppercase}
+.party-choice-name{display:flex;flex-direction:column;gap:4px;min-width:0}.party-choice-name b{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.party-choice-name small{color:var(--muted)}
+.party-choice-open{color:var(--muted);font-size:20px}.party-choice-stats{display:flex;flex-wrap:wrap;gap:7px 14px;padding-top:10px;border-top:1px solid var(--border);color:var(--muted);font-size:12px}.party-choice-stats b{color:var(--text)}
+.party-choice-activity{color:var(--muted)}
+.internal-party-badge{display:inline-flex;align-items:center;width:max-content;padding:3px 7px;border:1px solid rgba(255,132,52,.28);border-radius:999px;background:rgba(255,132,52,.08);color:var(--accent)!important;font-size:10px!important;font-weight:700;text-decoration:none}
+.relationship-hero{display:grid;grid-template-columns:minmax(0,1fr) 44px minmax(0,1fr);gap:14px;align-items:stretch;margin:0 0 16px}
+.relationship-side{display:flex;flex-direction:column;gap:5px;padding:16px 18px;border:1px solid var(--border);border-radius:14px;background:var(--surface-2)}
+.relationship-side.active-side{border-color:rgba(255,132,52,.42);box-shadow:inset 3px 0 0 var(--accent)}
+.relationship-side small{color:var(--muted)}.relationship-side b{font-size:17px}.relationship-side a{margin-top:5px;font-size:12px}
+.relationship-route-arrow{display:grid;place-items:center;color:var(--accent);font-size:22px;font-weight:800}
+.relationship-flow{display:flex;flex-direction:column;gap:13px}.relationship-flow-head{margin:0 0 2px;padding:0 2px}
+.relationship-contract-card{overflow:hidden;border:1px solid var(--border);border-radius:16px;background:var(--surface-2)}
+.relationship-contract-head{display:flex;justify-content:space-between;gap:18px;align-items:flex-start;padding:18px;border-bottom:1px solid var(--border)}
+.relationship-contract-head h3{margin:3px 0 5px;font-size:18px}.relationship-contract-actions{display:flex;gap:9px;align-items:center;flex-shrink:0}
+.relationship-contract-body{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
+.relationship-column{min-width:0;padding:16px 18px}.relationship-column+.relationship-column{border-left:1px solid var(--border)}
+.relationship-column-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:10px}.relationship-column-head h4{margin:0 0 3px}.relationship-column-head small{color:var(--muted)}
+.count-pill{display:inline-flex;min-width:26px;height:24px;align-items:center;justify-content:center;border-radius:999px;background:var(--accent-soft);color:var(--accent);font-size:12px;font-weight:800}
+.relationship-doc-row{display:grid;grid-template-columns:34px minmax(0,1fr) auto;gap:10px;align-items:center;padding:10px 0;border-top:1px solid var(--border);color:inherit;text-decoration:none}
+.relationship-doc-row:first-of-type{border-top:0}.relationship-doc-row>span:nth-child(2){display:flex;flex-direction:column;gap:2px;min-width:0}
+.relationship-doc-row>span:nth-child(2) b,.relationship-doc-row>span:nth-child(2) small{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.relationship-doc-row small{color:var(--muted)}
+.relationship-doc-row>span:last-child{color:var(--muted);font-size:12px}
+.relationship-doc-icon{display:grid;place-items:center;width:30px;height:30px;border-radius:9px;background:rgba(125,145,170,.12);color:var(--muted);font-size:11px;font-weight:800}
+.main-contract-file .relationship-doc-icon{background:var(--accent-soft);color:var(--accent)}
+.relationship-operation-row{display:grid;grid-template-columns:52px minmax(0,1fr) auto;gap:11px;align-items:center;padding:10px 0;border-top:1px solid var(--border);color:inherit;text-decoration:none}
+.relationship-operation-row:first-of-type{border-top:0}.operation-date-block{display:flex;flex-direction:column;align-items:center;padding:5px 4px;border-radius:9px;background:rgba(125,145,170,.08)}
+.operation-date-block b{font-size:15px}.operation-date-block small{color:var(--muted);font-size:10px}.relationship-operation-main{display:flex;flex-direction:column;gap:3px;min-width:0}
+.relationship-operation-main b{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.relationship-operation-main small{color:var(--muted)}.relationship-operation-open{color:var(--muted);font-size:18px}
+.relationship-empty{margin:12px 0 4px;color:var(--muted);font-size:13px}.no-contract-zone{margin-top:16px}
+.relationship-operation-row.standalone,.relationship-doc-row.standalone{padding:11px 3px}
+.internal-party-note{display:flex;justify-content:space-between;gap:18px;align-items:center}.internal-party-note>div{display:flex;flex-direction:column;gap:7px}
+@media(max-width:900px){.relationship-context{align-items:stretch;flex-direction:column}.relationship-context-arrow{display:none}.context-field{min-width:0}.relationship-hero{grid-template-columns:1fr}.relationship-route-arrow{transform:rotate(90deg);height:22px}.relationship-contract-head{flex-direction:column}.relationship-contract-actions{width:100%;justify-content:space-between}.relationship-contract-body{grid-template-columns:1fr}.relationship-column+.relationship-column{border-left:0;border-top:1px solid var(--border)}.party-choice-grid{grid-template-columns:1fr}.internal-party-note{align-items:flex-start;flex-direction:column}}

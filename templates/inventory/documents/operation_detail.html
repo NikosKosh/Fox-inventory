@@ -2,70 +2,18 @@
 {% block title %}{{ object.title }} — FOX Inventory{% endblock %}
 {% block content %}
 {% if object.contract %}
-<a class="back-link" href="{{ object.contract.get_absolute_url }}">← К договору</a>
+<a class="back-link" href="{{ object.contract.get_absolute_url }}{% if request.GET.view %}?view={{ request.GET.view }}{% endif %}">← К договору</a>
 {% else %}
 <a class="back-link" href="{% url 'organization_document_workspace' object.organization.pk %}">← К документам организации</a>
 {% endif %}
-
 <div class="page-head operation-head">
-  <div>
-    <span class="eyebrow">Операция / пакет документов</span>
-    <h1>{{ object.title }}</h1>
-    <p class="muted">
-      {{ object.organization }}
-      {% if object.counterparty %} ↔ {{ object.counterparty }}{% endif %}
-      {% if object.operation_date %} · {{ object.operation_date|date:"d.m.Y" }}{% endif %}
-    </p>
-  </div>
-  <div class="actions">
-    <a class="btn" href="{% url 'document_upload' %}?operation={{ object.pk }}">+ Документ</a>
-    <a class="btn primary" href="{% url 'operation_edit' object.pk %}">Изменить</a>
-  </div>
+  <div><span class="eyebrow">Операция / пакет документов</span><h1>{{ object.title }}</h1><p class="muted">{{ object.organization }}{% if object.counterparty %} ↔ {{ object.counterparty }}{% endif %}{% if object.operation_date %} · {{ object.operation_date|date:"d.m.Y" }}{% endif %}</p></div>
+  <div class="actions"><a class="btn" href="{% url 'document_upload' %}?operation={{ object.pk }}">+ Документ</a><a class="btn primary" href="{% url 'operation_edit' object.pk %}">Изменить</a></div>
 </div>
-
 {% include "inventory/documents/_nav.html" %}
-
 <div class="grid two">
-  <section class="card">
-    <h2>Операция</h2>
-    <dl class="details">
-      <dt>Организация</dt><dd><a href="{% url 'organization_document_workspace' object.organization.pk %}">{{ object.organization }}</a></dd>
-      <dt>Контрагент</dt><dd>{% if object.counterparty %}<a href="{{ object.counterparty.get_absolute_url }}">{{ object.counterparty }}</a>{% else %}—{% endif %}</dd>
-      <dt>Договор</dt><dd>{% if object.contract %}<a href="{{ object.contract.get_absolute_url }}">{{ object.contract }}</a>{% else %}Без договора{% endif %}</dd>
-      <dt>Дата</dt><dd>{{ object.operation_date|date:"d.m.Y"|default:"—" }}</dd>
-      <dt>Сумма</dt><dd>{% if object.amount %}{{ object.amount }} ₽{% else %}—{% endif %}</dd>
-      <dt>Объект</dt><dd>{% if object.location %}<a href="{{ object.location.get_absolute_url }}">{{ object.location }}</a>{% else %}—{% endif %}</dd>
-      <dt>Комментарий</dt><dd>{{ object.notes|default:"—"|linebreaksbr }}</dd>
-    </dl>
-  </section>
-
-  <section class="card operation-summary-card">
-    <span class="eyebrow">Пакет</span>
-    <strong>{{ documents|length }}</strong>
-    <span>документов</span>
-    <p class="muted">Все файлы ниже относятся к одной хозяйственной операции.</p>
-  </section>
+  <section class="card"><h2>Операция</h2><dl class="details"><dt>Организация</dt><dd><a href="{% url 'organization_document_workspace' object.organization.pk %}">{{ object.organization }}</a></dd><dt>Контрагент</dt><dd>{% if object.counterparty %}<a href="{{ object.counterparty.get_absolute_url }}">{{ object.counterparty }}</a>{% else %}—{% endif %}</dd><dt>Договор</dt><dd>{% if object.contract %}<a href="{{ object.contract.get_absolute_url }}{% if request.GET.view %}?view={{ request.GET.view }}{% endif %}">{{ object.contract }}</a>{% else %}Без договора{% endif %}</dd><dt>Дата</dt><dd>{{ object.operation_date|date:"d.m.Y"|default:"—" }}</dd><dt>Сумма</dt><dd>{% if object.amount %}{{ object.amount }} ₽{% else %}—{% endif %}</dd><dt>Объект</dt><dd>{% if object.location %}<a href="{{ object.location.get_absolute_url }}">{{ object.location }}</a>{% else %}—{% endif %}</dd><dt>Комментарий</dt><dd>{{ object.notes|default:"—"|linebreaksbr }}</dd></dl></section>
+  <section class="card operation-summary-card"><span class="eyebrow">Пакет</span><strong>{{ documents|length }}</strong><span>документов</span><p class="muted">Все файлы ниже относятся к одной операции.</p></section>
 </div>
-
-<section class="card">
-  <div class="section-head">
-    <div><h2>Документы операции</h2><p class="muted">Счета, УПД, акты, накладные и другие документы одного события.</p></div>
-    <a class="btn small" href="{% url 'document_upload' %}?operation={{ object.pk }}">+ Документ</a>
-  </div>
-  <div class="operation-documents">
-    {% for item in documents %}
-      <a class="operation-document-row" href="{{ item.get_absolute_url }}">
-        <span class="doc-type-badge">{{ item.document_type|default:"Документ" }}</span>
-        <span class="operation-document-main">
-          <b>{{ item.display_title }}</b>
-          <small>{{ item.original_name }}</small>
-        </span>
-        <span>{{ item.document_date|date:"d.m.Y"|default:"—" }}</span>
-        <span class="numeric-col">{% if item.amount %}{{ item.amount }} ₽{% else %}—{% endif %}</span>
-      </a>
-    {% empty %}
-      <p class="muted">Документы в операцию ещё не добавлены.</p>
-    {% endfor %}
-  </div>
-</section>
+<section class="card"><div class="section-head"><div><h2>Документы операции</h2><p class="muted">Счета, УПД, акты, накладные и другие документы одного события.</p></div><a class="btn small" href="{% url 'document_upload' %}?operation={{ object.pk }}">+ Документ</a></div><div class="operation-documents">{% for item in documents %}<a class="operation-document-row" href="{{ item.get_absolute_url }}"><span class="doc-type-badge">{{ item.document_type|default:"Документ" }}</span><span class="operation-document-main"><b>{{ item.display_title }}</b><small>{{ item.original_name }}</small></span><span>{{ item.document_date|date:"d.m.Y"|default:"—" }}</span><span class="numeric-col">{% if item.amount %}{{ item.amount }} ₽{% else %}—{% endif %}</span></a>{% empty %}<p class="muted">Документы в операцию ещё не добавлены.</p>{% endfor %}</div></section>
 {% endblock %}

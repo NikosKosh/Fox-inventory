@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.2.3 — 2026-08-10
+
+- Rebuilt document navigation around a clear relationship context: organization → counterparty → contract → operation → documents.
+- Organization workspace no longer mixes all counterparties into one flat screen; it opens as a searchable partner picker.
+- Added a persistent two-sided context switcher so users always see whose side they are working from and which counterparty is selected.
+- Added relationship cards that keep contract-level documents and execution operations inside the same contract hierarchy.
+- Added explicit links between Counterparty and internal Organization records, replacing fragile name-only matching for two-sided internal contracts.
+- Existing internal organizations receive canonical counterparty profiles during migration without duplicating contracts or documents.
+- The same contract remains visible from either internal organization’s perspective.
+- Contract names no longer repeat their number when the number is already part of the title.
+- Contract, operation and document creation can be prefilled from the selected relationship context.
+- Counterparty screens now distinguish external counterparties from internal organizations.
+
 ## 1.2.2 — 2026-08-10
 
 - Added document operations as a package layer between contracts and individual files.

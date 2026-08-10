@@ -472,6 +472,10 @@ def document_file_upload_to(instance, filename):
 class Counterparty(TimeStampedModel):
     name = models.CharField("Наименование", max_length=255)
     short_name = models.CharField("Краткое наименование", max_length=150, blank=True)
+    linked_organization = models.OneToOneField(
+        Organization, verbose_name="Внутренняя организация", on_delete=models.SET_NULL,
+        null=True, blank=True, related_name="counterparty_profile",
+    )
     inn = models.CharField("ИНН", max_length=20, blank=True, db_index=True)
     kpp = models.CharField("КПП", max_length=20, blank=True)
     contact_name = models.CharField("Контакт", max_length=255, blank=True)
@@ -541,8 +545,11 @@ class Contract(TimeStampedModel):
         ]
 
     def __str__(self):
-        number = f" №{self.number}" if self.number else ""
-        return f"{self.title}{number}"
+        if not self.number:
+            return self.title
+        if self.number.casefold() in self.title.casefold():
+            return self.title
+        return f"{self.title} №{self.number}"
 
     def get_absolute_url(self):
         return reverse("contract_detail", args=[self.pk])

@@ -56,62 +56,159 @@ def _selected_organization(request):
 
 
 
-def _party_key(value):
-    return "".join(ch for ch in (value or "").casefold() if ch.isalnum())
-
-
 def _counterparty_ids_for_organization(organization):
-    keys = {_party_key(organization.name), _party_key(organization.short_name)}
-    keys.discard("")
-    return [
-        item.pk
-        for item in Counterparty.objects.filter(archived=False).only("pk", "name", "short_name")
-        if _party_key(item.name) in keys or _party_key(item.short_name) in keys
-    ]
+    return list(
+        Counterparty.objects.filter(
+            archived=False,
+            linked_organization=organization,
+        ).values_list("pk", flat=True)
+    )
 
 
 def _organization_for_counterparty(counterparty):
     if counterparty is None:
         return None
-    keys = {_party_key(counterparty.name), _party_key(counterparty.short_name)}
-    keys.discard("")
-    for organization in _organization_queryset().only("pk", "name", "short_name", "prefix"):
-        if _party_key(organization.name) in keys or _party_key(organization.short_name) in keys:
-            return organization
-    return None
+    return counterparty.linked_organization
 
 
 def _contracts_for_organization(organization, archived=False):
-    linked_counterparties = _counterparty_ids_for_organization(organization)
     return Contract.objects.filter(archived=archived).filter(
-        Q(organization=organization) | Q(counterparty_id__in=linked_counterparties)
+        Q(organization=organization)
+        | Q(counterparty__linked_organization=organization)
     ).distinct()
 
 
 def _documents_for_organization(organization):
-    linked_counterparties = _counterparty_ids_for_organization(organization)
     return DocumentRecord.objects.filter(trashed_at__isnull=True).filter(
         Q(organization=organization)
-        | Q(counterparty_id__in=linked_counterparties)
-        | Q(contract__counterparty_id__in=linked_counterparties)
+        | Q(counterparty__linked_organization=organization)
+        | Q(contract__counterparty__linked_organization=organization)
     ).distinct()
 
 
 def _reminders_for_organization(organization):
-    linked_counterparties = _counterparty_ids_for_organization(organization)
     return Reminder.objects.filter(active=True).filter(
         Q(organization=organization)
-        | Q(counterparty_id__in=linked_counterparties)
-        | Q(contract__counterparty_id__in=linked_counterparties)
+        | Q(counterparty__linked_organization=organization)
+        | Q(contract__counterparty__linked_organization=organization)
     ).distinct()
-
 
 
 def _operations_for_organization(organization):
-    linked_counterparties = _counterparty_ids_for_organization(organization)
     return DocumentOperation.objects.filter(
-        Q(organization=organization) | Q(counterparty_id__in=linked_counterparties)
+        Q(organization=organization)
+        | Q(counterparty__linked_organization=organization)
+        | Q(contract__counterparty__linked_organization=organization)
     ).distinct()
+
+
+def _relative_party_descriptor(viewpoint, owner_organization, counterparty):
+    if owner_organization is None:
+        return None
+
+    if owner_organization.pk == viewpoint.pk:
+        if counterparty is None:
+            return None
+        linked = counterparty.linked_organization
+        if linked is not None:
+            if linked.pk == viewpoint.pk:
+                return None
+            return {
+                "key": f"org:{linked.pk}",
+                "kind": "organization",
+                "name": str(linked),
+                "internal": True,
+                "organization_id": linked.pk,
+                "counterparty_id": counterparty.pk,
+                "form_counterparty_id": counterparty.pk,
+            }
+        return {
+            "key": f"cp:{counterparty.pk}",
+            "kind": "counterparty",
+            "name": str(counterparty),
+            "internal": False,
+            "organization_id": None,
+            "counterparty_id": counterparty.pk,
+            "form_counterparty_id": counterparty.pk,
+        }
+
+    if (
+        counterparty is not None
+        and counterparty.linked_organization_id == viewpoint.pk
+    ):
+        partner_profile = getattr(owner_organization, "counterparty_profile", None)
+        return {
+            "key": f"org:{owner_organization.pk}",
+            "kind": "organization",
+            "name": str(owner_organization),
+            "internal": True,
+            "organization_id": owner_organization.pk,
+            "counterparty_id": partner_profile.pk if partner_profile else None,
+            "form_counterparty_id": partner_profile.pk if partner_profile else None,
+        }
+
+    return None
+
+
+def _relative_party_key(viewpoint, item):
+    descriptor = _relative_party_descriptor(
+        viewpoint,
+        getattr(item, "organization", None),
+        getattr(item, "counterparty", None),
+    )
+    return descriptor["key"] if descriptor else None
+
+
+def _build_party_options(organization, contracts, documents, operations, reminders):
+    rows = {}
+
+    def add(item, counter_name, date_value):
+        descriptor = _relative_party_descriptor(
+            organization,
+            getattr(item, "organization", None),
+            getattr(item, "counterparty", None),
+        )
+        if descriptor is None:
+            return
+
+        row = rows.get(descriptor["key"])
+        if row is None:
+            initials = "".join(
+                token[:1]
+                for token in descriptor["name"].replace("«", " ").replace("»", " ").split()
+                if token
+            )[:2].upper()
+            row = {
+                **descriptor,
+                "initials": initials or "•",
+                "contract_count": 0,
+                "operation_count": 0,
+                "document_count": 0,
+                "reminder_count": 0,
+                "last_date": None,
+            }
+            rows[descriptor["key"]] = row
+
+        row[counter_name] += 1
+        if date_value and (row["last_date"] is None or date_value > row["last_date"]):
+            row["last_date"] = date_value
+
+    for item in contracts:
+        add(item, "contract_count", item.contract_date)
+    for item in operations:
+        add(item, "operation_count", item.operation_date)
+    for item in documents:
+        add(item, "document_count", item.document_date)
+    for item in reminders:
+        add(item, "reminder_count", item.effective_due_date)
+
+    result = sorted(rows.values(), key=lambda row: row["name"].casefold())
+    for row in result:
+        row["href"] = (
+            reverse("organization_document_workspace", args=[organization.pk])
+            + f"?party={row['key']}"
+        )
+    return result
 
 
 @login_required
@@ -165,6 +262,12 @@ def operation_form(request, pk=None):
                 "operation_date": timezone.localdate(),
             }
         )
+
+    if obj is None and request.GET.get("counterparty"):
+        initial["counterparty"] = get_object_or_404(
+            Counterparty.objects.filter(archived=False),
+            pk=request.GET["counterparty"],
+        ).pk
 
     form = DocumentOperationForm(
         request.POST or None,
@@ -300,40 +403,173 @@ def operation_from_documents(request):
 @login_required
 def organization_document_workspace(request, pk):
     organization = get_object_or_404(_organization_queryset(), pk=pk)
-    contracts = _contracts_for_organization(organization).select_related(
-        "organization", "counterparty", "location", "responsible_employee"
-    ).annotate(
-        document_count=Count("documents", filter=Q(documents__trashed_at__isnull=True), distinct=True),
-        operation_count=Count("operations", distinct=True),
+
+    contracts = list(
+        _contracts_for_organization(organization)
+        .select_related(
+            "organization",
+            "counterparty",
+            "counterparty__linked_organization",
+            "location",
+            "responsible_employee",
+        )
+        .order_by("-contract_date", "-pk")
     )
-    documents = _documents_for_organization(organization).select_related(
-        "organization", "document_type", "counterparty", "contract", "operation", "location"
+    documents = list(
+        _documents_for_organization(organization)
+        .select_related(
+            "organization",
+            "counterparty",
+            "counterparty__linked_organization",
+            "document_type",
+            "contract",
+            "operation",
+            "location",
+        )
+        .order_by("-document_date", "-created_at", "-pk")
     )
-    operations = _operations_for_organization(organization).select_related(
-        "organization", "counterparty", "contract", "location"
-    ).annotate(
-        document_count=Count("documents", filter=Q(documents__trashed_at__isnull=True), distinct=True)
+    operations = list(
+        _operations_for_organization(organization)
+        .select_related(
+            "organization",
+            "counterparty",
+            "counterparty__linked_organization",
+            "contract",
+            "location",
+        )
+        .order_by("-operation_date", "-created_at", "-pk")
     )
-    reminders = _reminders_for_organization(organization).select_related(
-        "organization", "counterparty", "contract", "location"
+    reminders = list(
+        _reminders_for_organization(organization)
+        .select_related(
+            "organization",
+            "counterparty",
+            "counterparty__linked_organization",
+            "contract",
+            "location",
+        )
+        .order_by("next_due_date", "pk")
     )
-    related_counterparties = Counterparty.objects.filter(
-        Q(contracts__in=contracts) | Q(documents__in=documents)
-    ).distinct()
-    return render(request, "inventory/documents/organization_workspace.html", {
+
+    party_options = _build_party_options(
+        organization,
+        contracts,
+        documents,
+        operations,
+        reminders,
+    )
+    requested_party = request.GET.get("party", "").strip()
+    selected_party = next(
+        (row for row in party_options if row["key"] == requested_party),
+        None,
+    )
+
+    context = {
         "organization": organization,
         "organizations": _organization_queryset(),
-        "contracts": contracts[:50],
-        "operations": operations[:50],
-        "operations_total": operations.count(),
-        "contracts_total": contracts.count(),
-        "documents_total": documents.count(),
-        "counterparties_total": related_counterparties.count(),
-        "reminders_total": reminders.count(),
-        "ungrouped_documents": documents.filter(operation__isnull=True).order_by("-document_date", "-created_at")[:20],
-        "no_contract_operations": operations.filter(contract__isnull=True)[:12],
-        "reminder_rows": reminder_rows(reminders.order_by("next_due_date", "pk")[:8]),
+        "party_options": party_options,
+        "selected_party": selected_party,
+        "parties_total": len(party_options),
+        "contracts_total": len(contracts),
+        "documents_total": len(documents),
+        "operations_total": len(operations),
+        "reminders_total": len(reminders),
+        "selected_contracts_total": 0,
+        "selected_documents_total": 0,
+        "selected_operations_total": 0,
+        "selected_reminders_total": 0,
+        "contract_groups": [],
+        "no_contract_operations": [],
+        "no_contract_documents": [],
+    }
+
+    if selected_party is None:
+        return render(
+            request,
+            "inventory/documents/organization_workspace.html",
+            context,
+        )
+
+    party_key = selected_party["key"]
+    party_contracts = [
+        item for item in contracts
+        if _relative_party_key(organization, item) == party_key
+    ]
+    party_documents = [
+        item for item in documents
+        if _relative_party_key(organization, item) == party_key
+    ]
+    party_operations = [
+        item for item in operations
+        if _relative_party_key(organization, item) == party_key
+    ]
+    party_reminders = [
+        item for item in reminders
+        if _relative_party_key(organization, item) == party_key
+    ]
+
+    docs_by_operation = {}
+    for document in party_documents:
+        if document.operation_id:
+            docs_by_operation.setdefault(document.operation_id, []).append(document)
+
+    contract_groups = []
+    for contract in party_contracts:
+        contract_documents = [
+            item for item in party_documents
+            if item.contract_id == contract.pk and item.operation_id is None
+        ]
+        contract_operations = [
+            item for item in party_operations
+            if item.contract_id == contract.pk
+        ]
+        operation_rows = [
+            {
+                "object": operation,
+                "documents": docs_by_operation.get(operation.pk, []),
+                "document_count": len(docs_by_operation.get(operation.pk, [])),
+            }
+            for operation in contract_operations
+        ]
+        contract_groups.append({
+            "contract": contract,
+            "documents": contract_documents,
+            "contract_document_count": len(contract_documents)
+                + (1 if contract.main_file else 0),
+            "operations": operation_rows,
+            "operation_count": len(operation_rows),
+        })
+
+    no_contract_operation_rows = []
+    for operation in party_operations:
+        if operation.contract_id is None:
+            no_contract_operation_rows.append({
+                "object": operation,
+                "documents": docs_by_operation.get(operation.pk, []),
+                "document_count": len(docs_by_operation.get(operation.pk, [])),
+            })
+
+    no_contract_documents = [
+        item for item in party_documents
+        if item.contract_id is None and item.operation_id is None
+    ]
+
+    context.update({
+        "selected_contracts_total": len(party_contracts),
+        "selected_documents_total": len(party_documents),
+        "selected_operations_total": len(party_operations),
+        "selected_reminders_total": len(party_reminders),
+        "contract_groups": contract_groups,
+        "no_contract_operations": no_contract_operation_rows,
+        "no_contract_documents": no_contract_documents,
     })
+
+    return render(
+        request,
+        "inventory/documents/organization_workspace.html",
+        context,
+    )
+
 
 def _paginate(request, queryset, per_page=50):
     paginator = Paginator(queryset, per_page)
@@ -528,6 +764,7 @@ def document_upload(request):
     initial_contract = None
     initial_operation = None
     initial_organization = None
+    initial_counterparty = None
     initial_location = None
     initial_equipment = None
     if request.GET.get("operation"):
@@ -540,12 +777,18 @@ def document_upload(request):
         initial_location = get_object_or_404(Location.objects.select_related("organization"), pk=request.GET["location"], archived=False)
     elif request.GET.get("organization"):
         initial_organization = get_object_or_404(_organization_queryset(), pk=request.GET["organization"])
+    if request.GET.get("counterparty"):
+        initial_counterparty = get_object_or_404(
+            Counterparty.objects.filter(archived=False),
+            pk=request.GET["counterparty"],
+        )
     form = DocumentUploadForm(
         request.POST or None,
         request.FILES or None,
         initial_contract=initial_contract,
         initial_operation=initial_operation,
         initial_organization=initial_organization,
+        initial_counterparty=initial_counterparty,
         initial_location=initial_location,
         initial_equipment=initial_equipment,
     )
@@ -659,7 +902,7 @@ def document_delete_permanently(request, pk):
 def counterparty_list(request):
     q = request.GET.get("q", "").strip()
     show_archived = request.GET.get("archived") == "1"
-    qs = Counterparty.objects.filter(archived=show_archived).annotate(
+    qs = Counterparty.objects.filter(archived=show_archived).select_related("linked_organization").annotate(
         contract_count=Count("contracts", filter=Q(contracts__archived=False), distinct=True),
         document_count=Count("documents", filter=Q(documents__trashed_at__isnull=True), distinct=True),
     )
@@ -719,24 +962,77 @@ def contract_list(request):
 @login_required
 def contract_detail(request, pk):
     obj = get_object_or_404(
-        Contract.objects.select_related("organization", "counterparty", "location", "responsible_employee", "created_by"),
+        Contract.objects.select_related(
+            "organization",
+            "counterparty",
+            "counterparty__linked_organization",
+            "location",
+            "responsible_employee",
+            "created_by",
+        ),
         pk=pk,
     )
-    operations = obj.operations.select_related("organization", "counterparty", "location").annotate(
-        document_count=Count("documents", filter=Q(documents__trashed_at__isnull=True), distinct=True)
+
+    viewpoint = obj.organization
+    requested_view = request.GET.get("view", "").strip()
+    if requested_view.isdigit():
+        candidate = _organization_queryset().filter(pk=int(requested_view)).first()
+        if candidate is not None and (
+            candidate.pk == obj.organization_id
+            or candidate.pk == obj.counterparty.linked_organization_id
+        ):
+            viewpoint = candidate
+
+    other_party = _relative_party_descriptor(
+        viewpoint,
+        obj.organization,
+        obj.counterparty,
+    )
+    if other_party is None:
+        viewpoint = obj.organization
+        other_party = _relative_party_descriptor(
+            viewpoint,
+            obj.organization,
+            obj.counterparty,
+        )
+
+    relationship_back_url = reverse(
+        "organization_document_workspace",
+        args=[viewpoint.pk],
+    )
+    if other_party:
+        relationship_back_url += f"?party={other_party['key']}"
+
+    operations = obj.operations.select_related(
+        "organization", "counterparty", "location"
+    ).annotate(
+        document_count=Count(
+            "documents",
+            filter=Q(documents__trashed_at__isnull=True),
+            distinct=True,
+        )
     )
     contract_documents = (
-        obj.documents.filter(trashed_at__isnull=True, operation__isnull=True)
+        obj.documents.filter(
+            trashed_at__isnull=True,
+            operation__isnull=True,
+        )
         .select_related("document_type", "organization", "counterparty")
         .order_by("-document_date", "-created_at", "-pk")
     )
-    reminders = obj.reminders.filter(active=True).select_related("organization", "counterparty", "location")
+    reminders = obj.reminders.filter(active=True).select_related(
+        "organization", "counterparty", "location"
+    )
     return render(request, "inventory/documents/contract_detail.html", {
         "object": obj,
         "operations": operations,
         "contract_documents": contract_documents,
         "reminder_rows": reminder_rows(reminders),
+        "viewpoint": viewpoint,
+        "other_party": other_party,
+        "relationship_back_url": relationship_back_url,
     })
+
 
 @login_required
 def contract_form(request, pk=None):
@@ -744,6 +1040,8 @@ def contract_form(request, pk=None):
     initial = {}
     if obj is None and request.GET.get("organization"):
         initial["organization"] = request.GET["organization"]
+    if obj is None and request.GET.get("counterparty"):
+        initial["counterparty"] = request.GET["counterparty"]
     form = ContractForm(request.POST or None, request.FILES or None, instance=obj, initial=initial)
     if form.is_valid():
         saved = form.save(commit=False)

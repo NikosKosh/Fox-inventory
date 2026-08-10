@@ -2,18 +2,25 @@
 {% block title %}Документы — FOX Inventory{% endblock %}
 {% block content %}
 <div class="page-head document-head">
-  <div><span class="eyebrow">Документы</span><h1>Документы и договоры</h1><p class="muted">Сначала выберите организацию — внутри будет показан её полный контур договоров и документов.</p></div>
+  <div>
+    <span class="eyebrow">Документы</span>
+    <h1>Документы и договоры</h1>
+    <p class="muted">Рабочий маршрут: организация → контрагент → договор → операция → документы. Общий реестр остаётся для поиска, а не для ежедневной навигации.</p>
+  </div>
   <div class="actions"><a class="btn" href="{% url 'contract_add' %}">+ Договор</a><a class="btn primary" href="{% url 'document_upload' %}">+ Загрузить</a></div>
 </div>
 {% include "inventory/documents/_nav.html" %}
 
 <section class="card organization-document-selector">
-  <div class="section-head"><div><h2>Организации</h2><p class="muted">Откройте организацию, чтобы работать с документами именно от её стороны.</p></div><a href="{% url 'organization_list' %}">Справочник</a></div>
+  <div class="section-head">
+    <div><h2>От чьего лица смотрим?</h2><p class="muted">Выберите внутреннюю организацию. Следующим шагом система предложит только её реальные связи с контрагентами.</p></div>
+    <a href="{% url 'organization_list' %}">Справочник</a>
+  </div>
   <div class="organization-document-grid">
     {% for org in organizations %}
       <a class="organization-document-card" href="{% url 'organization_document_workspace' org.pk %}">
         <span class="organization-document-icon">{{ org.prefix|slice:":2" }}</span>
-        <span><b>{{ org }}</b><small>{{ org.prefix }} · открыть документы</small></span>
+        <span><b>{{ org }}</b><small>{{ org.prefix }} · выбрать организацию</small></span>
         <span class="organization-document-open">→</span>
       </a>
     {% empty %}<p class="muted">Организации не добавлены.</p>{% endfor %}
@@ -23,7 +30,7 @@
 <div class="stats document-stats">
   <a class="stat" href="{% url 'document_list' %}"><b>{{ documents_total }}</b><span>документов</span></a>
   <a class="stat" href="{% url 'contract_list' %}"><b>{{ contracts_total }}</b><span>договоров</span></a>
-  <a class="stat" href="{% url 'counterparty_list' %}"><b>{{ counterparties_total }}</b><span>контрагентов</span></a>
+  <a class="stat" href="{% url 'counterparty_list' %}"><b>{{ counterparties_total }}</b><span>сторон</span></a>
   <a class="stat {% if inbox_total %}attention{% endif %}" href="{% url 'document_inbox' %}"><b>{{ inbox_total }}</b><span>неразобранных</span></a>
   <a class="stat" href="{% url 'reminder_list' %}"><b>{{ reminders_total }}</b><span>напоминаний</span></a>
 </div>
@@ -43,7 +50,7 @@
     <div class="section-head"><div><h2>Последние договоры</h2><p class="muted">Обе стороны договора видны сразу.</p></div><a href="{% url 'contract_list' %}">Все</a></div>
     {% for contract in recent_contracts %}
       <a class="row-link" href="{{ contract.get_absolute_url }}">
-        <span><b>{{ contract.title }}</b><small>{{ contract.organization }} ↔ {{ contract.counterparty }}</small></span>
+        <span><b>{{ contract }}</b><small>{{ contract.organization }} ↔ {{ contract.counterparty }}</small></span>
         <small>{{ contract.status_label }}</small>
       </a>
     {% empty %}<p class="muted">Договоров пока нет.</p>{% endfor %}
@@ -51,9 +58,9 @@
 </div>
 
 <section class="card">
-  <div class="section-head"><div><h2>Последние документы</h2><p class="muted">Недавно добавленные файлы по всем организациям.</p></div><a href="{% url 'document_list' %}">Все документы</a></div>
+  <div class="section-head"><div><h2>Последние документы</h2><p class="muted">Недавно добавленные файлы по всем организациям.</p></div><a href="{% url 'document_list' %}">Общий реестр</a></div>
   <div class="table-wrap"><table class="dense-table"><thead><tr><th>Дата</th><th>Документ</th><th>Организация</th><th>Контрагент</th><th>Договор</th></tr></thead><tbody>
-  {% for item in recent_documents %}<tr><td>{{ item.document_date|date:"d.m.Y"|default:"—" }}</td><td><a href="{{ item.get_absolute_url }}"><b>{{ item.display_title }}</b></a><small>{{ item.original_name }}</small></td><td><span class="org-chip">{{ item.organization }}</span></td><td>{{ item.counterparty|default:"—" }}</td><td>{% if item.contract %}<a href="{{ item.contract.get_absolute_url }}">{{ item.contract.title }}</a>{% else %}—{% endif %}</td></tr>{% empty %}<tr><td colspan="5">Документы ещё не загружены.</td></tr>{% endfor %}
+  {% for item in recent_documents %}<tr><td>{{ item.document_date|date:"d.m.Y"|default:"—" }}</td><td><a href="{{ item.get_absolute_url }}"><b>{{ item.display_title }}</b></a><small>{{ item.original_name }}</small></td><td><span class="org-chip">{{ item.organization }}</span></td><td>{{ item.counterparty|default:"—" }}</td><td>{% if item.contract %}<a href="{{ item.contract.get_absolute_url }}">{{ item.contract }}</a>{% else %}—{% endif %}</td></tr>{% empty %}<tr><td colspan="5">Документы ещё не загружены.</td></tr>{% endfor %}
   </tbody></table></div>
 </section>
 {% endblock %}

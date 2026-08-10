@@ -1,3 +1,29 @@
 {% extends "base.html" %}
 {% block title %}Контрагенты — FOX Inventory{% endblock %}
-{% block content %}<div class="page-head"><div><h1>Контрагенты</h1><p class="muted">Поставщики, операторы связи, подрядчики и другие внешние организации.</p></div><a class="btn primary" href="{% url 'counterparty_add' %}">+ Контрагент</a></div>{% include "inventory/documents/_nav.html" %}<form class="filters"><input class="input grow" type="search" name="q" value="{{ q }}" placeholder="Название или ИНН"><label class="filter-check"><input type="checkbox" name="archived" value="1" {% if show_archived %}checked{% endif %}> Архив</label><button class="btn">Найти</button></form><section class="card"><div class="table-wrap"><table><thead><tr><th>Контрагент</th><th>ИНН</th><th>Контакт</th><th class="numeric-col">Договоры</th><th class="numeric-col">Документы</th></tr></thead><tbody>{% for item in objects %}<tr><td><a href="{{ item.get_absolute_url }}"><b>{{ item }}</b></a><small>{{ item.name }}</small></td><td>{{ item.inn|default:"—" }}</td><td>{{ item.contact_name|default:item.email|default:"—" }}</td><td class="numeric-col">{{ item.contract_count }}</td><td class="numeric-col">{{ item.document_count }}</td></tr>{% empty %}<tr><td colspan="5">Контрагенты не найдены.</td></tr>{% endfor %}</tbody></table></div></section>{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div><h1>Контрагенты и стороны</h1><p class="muted">Единый справочник сторон документооборота. Внутренние организации связаны со своими карточками и помечены отдельно.</p></div>
+  <a class="btn primary" href="{% url 'counterparty_add' %}">+ Контрагент</a>
+</div>
+{% include "inventory/documents/_nav.html" %}
+<form class="filters"><input class="input grow" type="search" name="q" value="{{ q }}" placeholder="Название или ИНН"><label class="filter-check"><input type="checkbox" name="archived" value="1" {% if show_archived %}checked{% endif %}> Архив</label><button class="btn">Найти</button></form>
+<section class="card">
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Сторона</th><th>ИНН</th><th>Тип</th><th>Контакт</th><th class="numeric-col">Договоры</th><th class="numeric-col">Документы</th></tr></thead>
+      <tbody>
+      {% for item in objects %}
+        <tr>
+          <td><a href="{{ item.get_absolute_url }}"><b>{{ item }}</b></a><small>{{ item.name }}</small></td>
+          <td>{{ item.inn|default:"—" }}</td>
+          <td>{% if item.linked_organization %}<a class="internal-party-badge" href="{% url 'organization_document_workspace' item.linked_organization.pk %}">Наша организация</a>{% else %}<span class="muted">Контрагент</span>{% endif %}</td>
+          <td>{{ item.contact_name|default:item.email|default:"—" }}</td>
+          <td class="numeric-col">{{ item.contract_count }}</td>
+          <td class="numeric-col">{{ item.document_count }}</td>
+        </tr>
+      {% empty %}<tr><td colspan="6">Контрагенты не найдены.</td></tr>{% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

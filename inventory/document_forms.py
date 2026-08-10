@@ -31,12 +31,15 @@ class StyledFormMixin:
 class CounterpartyForm(StyledFormMixin, forms.ModelForm):
     class Meta:
         model = Counterparty
-        fields = ["name", "short_name", "inn", "kpp", "contact_name", "phone", "email", "notes", "archived"]
+        fields = ["name", "short_name", "linked_organization", "inn", "kpp", "contact_name", "phone", "email", "notes", "archived"]
         widgets = {"notes": forms.Textarea(attrs={"rows": 3})}
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.apply_styles()
+        self.fields["linked_organization"].queryset = Organization.objects.filter(archived=False, kind=Organization.Kind.COMPANY)
+        self.fields["linked_organization"].empty_label = "Внешний контрагент"
+        self.fields["linked_organization"].help_text = "Заполняйте только если эта сторона является нашей внутренней организацией."
 
 
 class ContractForm(StyledFormMixin, forms.ModelForm):
@@ -69,6 +72,9 @@ class ContractForm(StyledFormMixin, forms.ModelForm):
         organization = data.get("organization")
         location = data.get("location")
         employee = data.get("responsible_employee")
+        counterparty = data.get("counterparty")
+        if counterparty and organization and counterparty.linked_organization_id == organization.id:
+            self.add_error("counterparty", "Организация не может заключить договор сама с собой.")
         if location and organization and location.organization_id != organization.id:
             self.add_error("location", "Объект относится к другой организации.")
         if employee and organization and employee.organization_id != organization.id:
@@ -154,7 +160,7 @@ class DocumentUploadForm(StyledFormMixin, forms.Form):
     title = forms.CharField(label="Название", max_length=255, required=False, help_text="Можно оставить пустым — будет использован тип документа.")
     notes = forms.CharField(label="Комментарий", required=False, widget=forms.Textarea(attrs={"rows": 3}))
 
-    def __init__(self, *args, initial_contract=None, initial_operation=None, initial_organization=None, initial_location=None, initial_equipment=None, **kwargs):
+    def __init__(self, *args, initial_contract=None, initial_operation=None, initial_organization=None, initial_counterparty=None, initial_location=None, initial_equipment=None, **kwargs):
         super().__init__(*args, **kwargs)
         self.apply_styles()
         self.fields["amount"].localize = True
@@ -183,6 +189,8 @@ class DocumentUploadForm(StyledFormMixin, forms.Form):
                 })
             elif initial_organization is not None:
                 self.initial["organization"] = initial_organization.pk
+            if initial_counterparty is not None:
+                self.initial["counterparty"] = initial_counterparty.pk
             if initial_location is not None:
                 self.initial["location"] = initial_location.pk
                 self.initial["organization"] = initial_location.organization_id
