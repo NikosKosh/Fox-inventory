@@ -1,6 +1,44 @@
 {% extends "base.html" %}
 {% block title %}{{ title }} — FOX Inventory{% endblock %}
 {% block content %}
-<a class="back-link" href="{{ cancel_url }}">← Назад</a><div class="page-head"><h1>{{ title }}</h1></div>{% include "inventory/documents/_nav.html" %}
-<section class="card"><form method="post" {% if multipart %}enctype="multipart/form-data"{% endif %} class="document-form">{% csrf_token %}{% if form.non_field_errors %}<div class="message error">{{ form.non_field_errors }}</div>{% endif %}<div class="form-grid">{% for field in form %}<label class="field {% if field.name == 'notes' or field.name == 'main_file' %}field-wide{% endif %}"><span>{{ field.label }}{% if field.field.required %} *{% endif %}</span>{{ field }}{% if field.help_text %}<small>{{ field.help_text }}</small>{% endif %}{% for error in field.errors %}<small class="error">{{ error }}</small>{% endfor %}</label>{% endfor %}</div><div class="actions"><button class="btn primary" type="submit">Сохранить</button><a class="btn" href="{{ cancel_url }}">Отмена</a></div></form></section>
+<a class="back-link" href="{{ cancel_url }}">← Назад</a>
+
+<div class="page-head">
+  <div>
+    <span class="eyebrow">{{ form_eyebrow|default:"Документы" }}</span>
+    <h1>{{ title }}</h1>
+    {% if form_intro %}<p class="muted">{{ form_intro }}</p>{% endif %}
+  </div>
+</div>
+
+{% include "inventory/documents/_nav.html" %}
+
+{% if context_label %}
+  <div class="form-context-banner">
+    <span>Контекст</span>
+    <b>{{ context_label }}</b>
+    <small>Поля стороны зафиксированы текущим маршрутом.</small>
+  </div>
+{% endif %}
+
+<section class="card">
+  <form method="post" {% if multipart %}enctype="multipart/form-data"{% endif %} class="document-form">
+    {% csrf_token %}
+    {% if form.non_field_errors %}<div class="message error">{{ form.non_field_errors }}</div>{% endif %}
+    <div class="form-grid">
+      {% for field in form %}
+        <label class="field {% if field.name == 'notes' or field.name == 'main_file' or field.name == 'title' %}field-wide{% endif %}">
+          <span>{{ field.label }}{% if field.field.required %} *{% endif %}</span>
+          {{ field }}
+          {% if field.help_text %}<small>{{ field.help_text }}</small>{% endif %}
+          {% for error in field.errors %}<small class="error">{{ error }}</small>{% endfor %}
+        </label>
+      {% endfor %}
+    </div>
+    <div class="actions">
+      <a class="btn" href="{{ cancel_url }}">Отмена</a>
+      <button class="btn primary" type="submit">Сохранить</button>
+    </div>
+  </form>
+</section>
 {% endblock %}

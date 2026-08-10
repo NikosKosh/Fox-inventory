@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.3.0 — 2026-08-10
+
+- Reworked the document area around a complete user journey instead of separate database entities.
+- Added persistent organization-to-counterparty relationships, so a company can be added before any contract or document exists.
+- Added in-context “Add side” workflow: attach an existing counterparty or create a new one without leaving the organization workspace.
+- Added duplicate protection by INN and normalized company name; quick creation reuses an existing card instead of producing a duplicate.
+- Rebuilt the organization workspace: the side picker is now the primary action, large duplicate selectors/stat cards were removed, and totals became secondary context.
+- Added an empty-relationship onboarding state with three explicit next steps: contract, package without contract, or standalone document.
+- Added a persistent relationship action bar with context-aware Contract / Package / Document actions.
+- Contract and package creation now lock the already selected organization/counterparty context and return to the correct viewpoint.
+- Added direct drag-and-drop upload inside a document package. Files inherit the package context automatically.
+- Added filename-based recognition for common document types: invoice, UPD, service act, waybill, invoice-facture, specification, addendum and contract.
+- Reworked package and contract pages to make attached files visually obvious and openable in the 1.2.4 viewer.
+- Rebuilt the generic document upload screen with a proper drop zone, selected-file list, context banner and safer navigation back to the source context.
+- Added migration 0014 to backfill existing organization/counterparty relationships without duplicating contracts, operations or documents.
+- Added UX regression tests for zero-document parties, duplicate handling, context locking and package quick upload.
+
 ## 1.2.4 — 2026-08-10
 
 - Added a first-class document viewer for invoices, UPDs, service acts, waybills, specifications and other attached business documents.

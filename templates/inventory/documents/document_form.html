@@ -1,10 +1,129 @@
 {% extends "base.html" %}
-{% block title %}{{ title }} — FOX Inventory<script id="file-drop-script">document.querySelectorAll('[data-file-drop]').forEach((zone)=>{const input=zone.querySelector('input[type=file]');if(!input)return;['dragenter','dragover'].forEach(type=>zone.addEventListener(type,e=>{e.preventDefault();zone.classList.add('dragover')}));['dragleave','drop'].forEach(type=>zone.addEventListener(type,e=>{e.preventDefault();zone.classList.remove('dragover')}));zone.addEventListener('drop',e=>{if(e.dataTransfer&&e.dataTransfer.files.length){input.files=e.dataTransfer.files;zone.classList.add('has-files')}});input.addEventListener('change',()=>zone.classList.toggle('has-files',input.files.length>0));});</script>
-{% endblock %}
+{% block title %}{{ title }} — FOX Inventory{% endblock %}
 {% block content %}
-<a class="back-link" href="{% if object %}{{ object.get_absolute_url }}{% else %}{% url 'document_list' %}{% endif %}">← Назад</a>
-<div class="page-head"><div><h1>{{ title }}</h1><p class="muted">Организация обязательна. Остальные связи заполняются только когда они полезны.</p></div></div>
+<a class="back-link" href="{% if cancel_url %}{{ cancel_url }}{% elif object %}{{ object.get_absolute_url }}{% else %}{% url 'document_list' %}{% endif %}">← Назад</a>
+
+<div class="page-head">
+  <div>
+    <span class="eyebrow">Документы</span>
+    <h1>{{ title }}</h1>
+    <p class="muted">
+      {% if multiple %}
+        Можно выбрать несколько файлов. Если тип не указан, FOX Inventory попробует распознать счёт, УПД, акт, накладную или спецификацию по имени каждого файла.
+      {% else %}
+        Измените реквизиты и файл документа.
+      {% endif %}
+    </p>
+  </div>
+</div>
+
 {% include "inventory/documents/_nav.html" %}
-<section class="card"><form method="post" enctype="multipart/form-data" class="document-form">{% csrf_token %}{% if form.non_field_errors %}<div class="message error">{{ form.non_field_errors }}</div>{% endif %}<div class="form-grid">{% for field in form %}<label class="field {% if field.name == 'files' or field.name == 'equipment' or field.name == 'notes' %}field-wide{% endif %} {% if field.name == 'files' %}file-drop-zone{% endif %}" {% if field.name == 'files' %}data-file-drop{% endif %}><span>{{ field.label }}{% if field.field.required %} *{% endif %}</span>{{ field }}{% if field.help_text %}<small>{{ field.help_text }}</small>{% endif %}{% for error in field.errors %}<small class="error">{{ error }}</small>{% endfor %}</label>{% endfor %}</div><div class="actions"><button class="btn primary" type="submit">Сохранить</button></div></form></section>
-<script id="file-drop-script">document.querySelectorAll('[data-file-drop]').forEach((zone)=>{const input=zone.querySelector('input[type=file]');if(!input)return;['dragenter','dragover'].forEach(type=>zone.addEventListener(type,e=>{e.preventDefault();zone.classList.add('dragover')}));['dragleave','drop'].forEach(type=>zone.addEventListener(type,e=>{e.preventDefault();zone.classList.remove('dragover')}));zone.addEventListener('drop',e=>{if(e.dataTransfer&&e.dataTransfer.files.length){input.files=e.dataTransfer.files;zone.classList.add('has-files')}});input.addEventListener('change',()=>zone.classList.toggle('has-files',input.files.length>0));});</script>
+
+{% if context_label %}
+  <div class="form-context-banner">
+    <span>Куда сохраняем</span>
+    <b>{{ context_label }}</b>
+    <small>Связанные поля зафиксированы текущим контекстом.</small>
+  </div>
+{% endif %}
+
+<section class="card document-upload-card">
+  <form method="post" enctype="multipart/form-data" class="document-form" data-document-form>
+    {% csrf_token %}
+    {% if form.non_field_errors %}<div class="message error">{{ form.non_field_errors }}</div>{% endif %}
+
+    <div class="form-grid">
+      {% for field in form %}
+        <label
+          class="field {% if field.name == 'files' or field.name == 'equipment' or field.name == 'notes' %}field-wide{% endif %} {% if field.name == 'files' %}file-drop-zone file-drop-zone-v2{% endif %}"
+          {% if field.name == 'files' %}data-file-drop{% endif %}
+        >
+          <span>{{ field.label }}{% if field.field.required %} *{% endif %}</span>
+          {% if field.name == 'files' %}
+            <div class="file-drop-copy">
+              <span class="drop-icon">↓</span>
+              <b>Перетащите файлы сюда или нажмите для выбора</b>
+              <small>PDF, изображения, Office-файлы и архивы</small>
+            </div>
+          {% endif %}
+          {{ field }}
+          {% if field.help_text %}<small>{{ field.help_text }}</small>{% endif %}
+          {% for error in field.errors %}<small class="error">{{ error }}</small>{% endfor %}
+        </label>
+      {% endfor %}
+    </div>
+
+    {% if multiple %}
+      <div class="selected-file-list" data-selected-files hidden>
+        <div class="section-head">
+          <div><h3>Выбранные файлы</h3><p class="muted">Проверьте комплект перед сохранением.</p></div>
+          <span data-selected-files-count></span>
+        </div>
+        <div data-selected-files-body></div>
+      </div>
+    {% endif %}
+
+    <div class="upload-form-note">
+      <b>Как лучше загружать</b>
+      <span>Если это один счёт + УПД + акт по одной поставке, сначала создайте пакет и загрузите весь комплект прямо внутрь него.</span>
+    </div>
+
+    <div class="actions">
+      <a class="btn" href="{% if cancel_url %}{{ cancel_url }}{% elif object %}{{ object.get_absolute_url }}{% else %}{% url 'document_list' %}{% endif %}">Отмена</a>
+      <button class="btn primary" type="submit">Сохранить{% if multiple %} документы{% endif %}</button>
+    </div>
+  </form>
+</section>
+
+<script>
+(function () {
+  const zone = document.querySelector("[data-file-drop]");
+  if (!zone) return;
+  const input = zone.querySelector('input[type="file"]');
+  const list = document.querySelector("[data-selected-files]");
+  const body = document.querySelector("[data-selected-files-body]");
+  const counter = document.querySelector("[data-selected-files-count]");
+
+  function renderFiles() {
+    const files = Array.from(input.files || []);
+    zone.classList.toggle("has-files", files.length > 0);
+    if (!list || !body || !counter) return;
+    list.hidden = files.length === 0;
+    counter.textContent = files.length ? "Файлов: " + files.length : "";
+    body.innerHTML = "";
+    files.forEach(function (file) {
+      const row = document.createElement("div");
+      row.className = "selected-file-row";
+      const name = document.createElement("b");
+      name.textContent = file.name;
+      const size = document.createElement("span");
+      size.textContent = file.size < 1024 * 1024
+        ? Math.max(1, Math.round(file.size / 1024)) + " КБ"
+        : (file.size / (1024 * 1024)).toFixed(1) + " МБ";
+      row.append(name, size);
+      body.appendChild(row);
+    });
+  }
+
+  ["dragenter", "dragover"].forEach(function (type) {
+    zone.addEventListener(type, function (event) {
+      event.preventDefault();
+      zone.classList.add("dragover");
+    });
+  });
+  ["dragleave", "drop"].forEach(function (type) {
+    zone.addEventListener(type, function (event) {
+      event.preventDefault();
+      zone.classList.remove("dragover");
+    });
+  });
+  zone.addEventListener("drop", function (event) {
+    if (event.dataTransfer && event.dataTransfer.files.length) {
+      input.files = event.dataTransfer.files;
+      renderFiles();
+    }
+  });
+  input.addEventListener("change", renderFiles);
+})();
+</script>
 {% endblock %}

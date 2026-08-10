@@ -497,6 +497,50 @@ class Counterparty(TimeStampedModel):
         return reverse("counterparty_detail", args=[self.pk])
 
 
+
+class OrganizationCounterpartyLink(TimeStampedModel):
+    organization = models.ForeignKey(
+        Organization,
+        verbose_name="Организация",
+        on_delete=models.PROTECT,
+        related_name="counterparty_links",
+    )
+    counterparty = models.ForeignKey(
+        Counterparty,
+        verbose_name="Вторая сторона",
+        on_delete=models.CASCADE,
+        related_name="organization_links",
+    )
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        verbose_name="Создал",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="created_counterparty_links",
+    )
+    archived = models.BooleanField("В архиве", default=False)
+
+    class Meta:
+        ordering = ["counterparty__name", "pk"]
+        verbose_name = "связь организации со стороной"
+        verbose_name_plural = "связи организаций со сторонами"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["organization", "counterparty"],
+                name="uniq_org_counterparty_link",
+            )
+        ]
+        indexes = [
+            models.Index(
+                fields=["organization", "archived"],
+                name="inv_party_link_org_idx",
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.organization} ↔ {self.counterparty}"
+
 class Contract(TimeStampedModel):
     class Category(models.TextChoices):
         SERVICES = "services", "Услуги"

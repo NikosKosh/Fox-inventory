@@ -6,6 +6,7 @@ from urllib.parse import quote
 
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
+from django.core.exceptions import ValidationError
 from django.core.files.storage import default_storage
 from django.core.paginator import Paginator
 from django.db import transaction
@@ -38,8 +39,10 @@ from .models import (
     Equipment,
     Location,
     Organization,
+    OrganizationCounterpartyLink,
     Reminder,
 )
+from .validators import validate_business_document
 
 
 def _organization_queryset():
@@ -55,6 +58,124 @@ def _selected_organization(request):
     except (ValueError, Organization.DoesNotExist):
         return None
 
+
+
+
+def _normalize_company_name(value):
+    return "".join(
+        char
+        for char in (value or "").casefold()
+        if char.isalnum()
+    )
+
+
+def _ensure_party_link(organization, counterparty, user=None):
+    if organization is None or counterparty is None:
+        return None
+    if counterparty.linked_organization_id == organization.pk:
+        return None
+
+    link, _ = OrganizationCounterpartyLink.objects.get_or_create(
+        organization=organization,
+        counterparty=counterparty,
+        defaults={"created_by": user, "archived": False},
+    )
+    updates = []
+    if link.archived:
+        link.archived = False
+        updates.append("archived")
+    if link.created_by_id is None and user is not None:
+        link.created_by = user
+        updates.append("created_by")
+    if updates:
+        updates.append("updated_at")
+        link.save(update_fields=updates)
+
+    linked_org = counterparty.linked_organization
+    owner_profile = getattr(organization, "counterparty_profile", None)
+    if linked_org is not None and owner_profile is not None:
+        reverse_link, _ = OrganizationCounterpartyLink.objects.get_or_create(
+            organization=linked_org,
+            counterparty=owner_profile,
+            defaults={"created_by": user, "archived": False},
+        )
+        if reverse_link.archived:
+            reverse_link.archived = False
+            reverse_link.save(update_fields=["archived", "updated_at"])
+
+    return link
+
+
+def _find_existing_counterparty(name="", inn=""):
+    qs = Counterparty.objects.filter(archived=False)
+    inn = (inn or "").strip()
+    if inn:
+        found = qs.filter(inn=inn).first()
+        if found is not None:
+            return found
+
+    key = _normalize_company_name(name)
+    if not key:
+        return None
+
+    for item in qs.only("pk", "name", "short_name", "inn"):
+        if key in {
+            _normalize_company_name(item.name),
+            _normalize_company_name(item.short_name),
+        }:
+            return item
+    return None
+
+
+def _infer_document_type_from_filename(filename):
+    name = (filename or "").casefold()
+    patterns = [
+        ("invoice-facture", ("счет-фактур", "счёт-фактур", "invoice-facture")),
+        ("contract", ("договор", "contract")),
+        ("addendum", ("допсоглаш", "доп. соглаш", "доп соглаш", "addendum")),
+        ("upd", ("упд",)),
+        ("invoice", ("счет", "счёт", "invoice")),
+        ("waybill", ("наклад", "waybill")),
+        ("specification", ("специф", "specification")),
+        ("service-act", ("акт", "service-act")),
+    ]
+    for code, tokens in patterns:
+        if any(token in name for token in tokens):
+            found = DocumentType.objects.filter(code=code, archived=False).first()
+            if found is not None:
+                return found
+    return None
+
+
+def _suggest_operation_title(contract, operation_date):
+    operation_date = operation_date or timezone.localdate()
+    if contract is None:
+        return f"Разовая операция · {operation_date:%d.%m.%Y}"
+    if contract.category == Contract.Category.SUPPLY:
+        return f"Поставка · {operation_date:%d.%m.%Y}"
+    if contract.category in {
+        Contract.Category.SERVICES,
+        Contract.Category.INTERNET,
+        Contract.Category.MAINTENANCE,
+        Contract.Category.SOFTWARE,
+        Contract.Category.RENT,
+    }:
+        return f"{contract.get_category_display()} · {date_format(operation_date, 'F Y')}"
+    return f"Исполнение · {operation_date:%d.%m.%Y}"
+
+
+def _relationship_context_label(organization, counterparty, contract=None, operation=None):
+    parts = []
+    if organization is not None:
+        parts.append(str(organization))
+    if counterparty is not None:
+        parts.append(str(counterparty))
+    label = " ↔ ".join(parts)
+    if contract is not None:
+        label += f" · {contract}"
+    if operation is not None:
+        label += f" · {operation}"
+    return label
 
 
 def _counterparty_ids_for_organization(organization):
@@ -160,38 +281,78 @@ def _relative_party_key(viewpoint, item):
     return descriptor["key"] if descriptor else None
 
 
-def _build_party_options(organization, contracts, documents, operations, reminders):
+def _build_party_options(
+    organization,
+    contracts,
+    documents,
+    operations,
+    reminders,
+    links=None,
+):
     rows = {}
 
+    def ensure(descriptor, counterparty=None):
+        if descriptor is None:
+            return None
+        row = rows.get(descriptor["key"])
+        if row is not None:
+            return row
+
+        initials = "".join(
+            token[:1]
+            for token in descriptor["name"]
+            .replace("«", " ")
+            .replace("»", " ")
+            .split()
+            if token
+        )[:2].upper()
+
+        row = {
+            **descriptor,
+            "initials": initials or "•",
+            "contract_count": 0,
+            "operation_count": 0,
+            "document_count": 0,
+            "reminder_count": 0,
+            "last_date": None,
+            "inn": counterparty.inn if counterparty is not None else "",
+            "search_text": " ".join(
+                value
+                for value in [
+                    descriptor["name"],
+                    counterparty.name if counterparty is not None else "",
+                    counterparty.short_name if counterparty is not None else "",
+                    counterparty.inn if counterparty is not None else "",
+                ]
+                if value
+            ),
+        }
+        rows[descriptor["key"]] = row
+        return row
+
+    for link in links or []:
+        descriptor = _relative_party_descriptor(
+            organization,
+            link.organization,
+            link.counterparty,
+        )
+        ensure(descriptor, link.counterparty)
+
     def add(item, counter_name, date_value):
+        counterparty = getattr(item, "counterparty", None)
         descriptor = _relative_party_descriptor(
             organization,
             getattr(item, "organization", None),
-            getattr(item, "counterparty", None),
+            counterparty,
         )
-        if descriptor is None:
+        row = ensure(descriptor, counterparty)
+        if row is None:
             return
 
-        row = rows.get(descriptor["key"])
-        if row is None:
-            initials = "".join(
-                token[:1]
-                for token in descriptor["name"].replace("«", " ").replace("»", " ").split()
-                if token
-            )[:2].upper()
-            row = {
-                **descriptor,
-                "initials": initials or "•",
-                "contract_count": 0,
-                "operation_count": 0,
-                "document_count": 0,
-                "reminder_count": 0,
-                "last_date": None,
-            }
-            rows[descriptor["key"]] = row
-
         row[counter_name] += 1
-        if date_value and (row["last_date"] is None or date_value > row["last_date"]):
+        if date_value and (
+            row["last_date"] is None or date_value > row["last_date"]
+        ):
             row["last_date"] = date_value
 
     for item in contracts:
@@ -211,98 +372,278 @@ def _build_party_options(organization, contracts, documents, operations, reminde
         )
     return result
 
-
 @login_required
 def operation_detail(request, pk):
     obj = get_object_or_404(
         DocumentOperation.objects.select_related(
-            "organization", "counterparty", "contract", "location", "created_by"
+            "organization",
+            "counterparty",
+            "counterparty__linked_organization",
+            "contract",
+            "location",
+            "created_by",
         ),
         pk=pk,
     )
     documents = list(
         obj.documents.filter(trashed_at__isnull=True)
-        .select_related("document_type", "organization", "counterparty", "contract")
+        .select_related(
+            "document_type",
+            "organization",
+            "counterparty",
+            "contract",
+        )
         .order_by("document_date", "pk")
     )
+
+    viewpoint = _relationship_viewpoint(
+        request,
+        obj.organization,
+        obj.counterparty,
+    )
+    relationship_back_url, other_party = _relationship_url(
+        viewpoint,
+        obj.organization,
+        obj.counterparty,
+    )
+
     return render(
         request,
         "inventory/documents/operation_detail.html",
-        {"object": obj, "documents": documents},
+        {
+            "object": obj,
+            "documents": documents,
+            "viewpoint": viewpoint,
+            "other_party": other_party,
+            "relationship_back_url": relationship_back_url,
+            "relationship_back_label": (
+                f"{viewpoint} ↔ {other_party['name']}"
+                if other_party
+                else str(viewpoint)
+            ),
+        },
     )
 
 
 @login_required
+@require_POST
+def operation_quick_upload(request, pk):
+    obj = get_object_or_404(
+        DocumentOperation.objects.select_related(
+            "organization",
+            "counterparty",
+            "contract",
+            "location",
+        ),
+        pk=pk,
+    )
+    uploaded_files = request.FILES.getlist("files")
+    if not uploaded_files:
+        messages.error(request, "Выберите хотя бы один файл.")
+        target = obj.get_absolute_url()
+        if request.GET.get("view"):
+            target += f"?view={request.GET['view']}"
+        return redirect(target)
+
+    valid_files = []
+    for uploaded in uploaded_files:
+        try:
+            validate_business_document(uploaded)
+        except ValidationError as exc:
+            messages.error(
+                request,
+                f"{uploaded.name}: {'; '.join(exc.messages)}",
+            )
+            target = obj.get_absolute_url()
+            if request.GET.get("view"):
+                target += f"?view={request.GET['view']}"
+            return redirect(target)
+        valid_files.append(uploaded)
+
+    with transaction.atomic():
+        _ensure_party_link(
+            obj.organization,
+            obj.counterparty,
+            request.user,
+        )
+        for uploaded in valid_files:
+            DocumentRecord.objects.create(
+                organization=obj.organization,
+                document_type=_infer_document_type_from_filename(
+                    uploaded.name
+                ),
+                counterparty=obj.counterparty,
+                contract=obj.contract,
+                operation=obj,
+                location=obj.location,
+                document_date=obj.operation_date,
+                file=uploaded,
+                original_name=uploaded.name,
+                created_by=request.user,
+            )
+
+    messages.success(
+        request,
+        f"В пакет добавлено файлов: {len(valid_files)}.",
+    )
+    target = obj.get_absolute_url()
+    if request.GET.get("view"):
+        target += f"?view={request.GET['view']}"
+    return redirect(target)
+
+
+@login_required
 def operation_form(request, pk=None):
-    obj = get_object_or_404(DocumentOperation, pk=pk) if pk else None
+    obj = get_object_or_404(
+        DocumentOperation.objects.select_related(
+            "organization",
+            "counterparty",
+            "contract",
+            "location",
+        ),
+        pk=pk,
+    ) if pk else None
+
     initial = {}
+    initial_organization = None
+    initial_counterparty = None
+    initial_contract = None
 
     if obj is None and request.GET.get("contract"):
-        contract = get_object_or_404(
-            Contract.objects.select_related("organization", "counterparty", "location"),
+        initial_contract = get_object_or_404(
+            Contract.objects.select_related(
+                "organization",
+                "counterparty",
+                "location",
+            ),
             pk=request.GET["contract"],
             archived=False,
         )
+        initial_organization = initial_contract.organization
+        initial_counterparty = initial_contract.counterparty
         initial.update(
             {
-                "organization": contract.organization_id,
-                "counterparty": contract.counterparty_id,
-                "contract": contract.pk,
-                "location": contract.location_id,
+                "organization": initial_contract.organization_id,
+                "counterparty": initial_contract.counterparty_id,
+                "contract": initial_contract.pk,
+                "location": initial_contract.location_id,
                 "operation_date": timezone.localdate(),
             }
         )
     elif obj is None and request.GET.get("organization"):
-        organization = get_object_or_404(
+        initial_organization = get_object_or_404(
             _organization_queryset(),
             pk=request.GET["organization"],
         )
         initial.update(
             {
-                "organization": organization.pk,
+                "organization": initial_organization.pk,
                 "operation_date": timezone.localdate(),
             }
         )
 
     if obj is None and request.GET.get("counterparty"):
-        initial["counterparty"] = get_object_or_404(
+        initial_counterparty = get_object_or_404(
             Counterparty.objects.filter(archived=False),
             pk=request.GET["counterparty"],
-        ).pk
+        )
+        initial["counterparty"] = initial_counterparty.pk
+
+    if obj is None:
+        operation_date = initial.get(
+            "operation_date",
+            timezone.localdate(),
+        )
+        initial.setdefault(
+            "title",
+            _suggest_operation_title(
+                initial_contract,
+                operation_date,
+            ),
+        )
 
     form = DocumentOperationForm(
         request.POST or None,
         instance=obj,
         initial=initial,
     )
+
+    if obj is None:
+        if initial.get("organization"):
+            form.fields["organization"].disabled = True
+        if initial.get("counterparty"):
+            form.fields["counterparty"].disabled = True
+        if initial.get("contract"):
+            form.fields["contract"].disabled = True
+
     if form.is_valid():
         saved = form.save(commit=False)
         if saved.pk is None:
             saved.created_by = request.user
         saved.save()
-        messages.success(request, "Операция сохранена.")
-        return redirect(saved)
+        _ensure_party_link(
+            saved.organization,
+            saved.counterparty,
+            request.user,
+        )
+        messages.success(request, "Пакет сохранён.")
+
+        target = saved.get_absolute_url()
+        viewpoint = request.GET.get("view", "").strip()
+        if viewpoint.isdigit():
+            target += f"?view={viewpoint}"
+        return redirect(target)
 
     if obj:
         cancel_url = obj.get_absolute_url()
-    elif initial.get("contract"):
-        cancel_url = reverse("contract_detail", args=[initial["contract"]])
-    elif initial.get("organization"):
+        context_label = _relationship_context_label(
+            obj.organization,
+            obj.counterparty,
+            obj.contract,
+        )
+    elif initial_organization and initial_counterparty:
+        descriptor = _relative_party_descriptor(
+            initial_organization,
+            initial_organization,
+            initial_counterparty,
+        )
         cancel_url = reverse(
             "organization_document_workspace",
-            args=[initial["organization"]],
+            args=[initial_organization.pk],
         )
+        if descriptor:
+            cancel_url += f"?party={descriptor['key']}"
+        context_label = _relationship_context_label(
+            initial_organization,
+            initial_counterparty,
+            initial_contract,
+        )
+    elif initial_contract:
+        cancel_url = initial_contract.get_absolute_url()
+        context_label = _relationship_context_label(
+            initial_contract.organization,
+            initial_contract.counterparty,
+            initial_contract,
+        )
+    elif initial_organization:
+        cancel_url = reverse(
+            "organization_document_workspace",
+            args=[initial_organization.pk],
+        )
+        context_label = str(initial_organization)
     else:
         cancel_url = reverse("document_center")
+        context_label = ""
 
     return render(
         request,
         "inventory/documents/operation_form.html",
         {
             "form": form,
-            "title": "Изменить операцию" if obj else "Новая операция",
+            "title": "Изменить пакет" if obj else "Новый пакет",
             "cancel_url": cancel_url,
             "selected_documents": [],
+            "context_label": context_label,
         },
     )
 
@@ -451,6 +792,18 @@ def organization_document_workspace(request, pk):
         )
         .order_by("next_due_date", "pk")
     )
+    links = list(
+        OrganizationCounterpartyLink.objects.filter(
+            organization=organization,
+            archived=False,
+        )
+        .select_related(
+            "organization",
+            "counterparty",
+            "counterparty__linked_organization",
+        )
+        .order_by("counterparty__name", "pk")
+    )
 
     party_options = _build_party_options(
         organization,
@@ -458,17 +811,35 @@ def organization_document_workspace(request, pk):
         documents,
         operations,
         reminders,
+        links=links,
     )
     requested_party = request.GET.get("party", "").strip()
     selected_party = next(
-        (row for row in party_options if row["key"] == requested_party),
+        (
+            row
+            for row in party_options
+            if row["key"] == requested_party
+        ),
         None,
+    )
+
+    linked_counterparty_ids = {
+        link.counterparty_id
+        for link in links
+    }
+    available_counterparties = (
+        Counterparty.objects.filter(archived=False)
+        .exclude(pk__in=linked_counterparty_ids)
+        .exclude(linked_organization=organization)
+        .select_related("linked_organization")
+        .order_by("name")
     )
 
     context = {
         "organization": organization,
         "organizations": _organization_queryset(),
         "party_options": party_options,
+        "available_counterparties": available_counterparties,
         "selected_party": selected_party,
         "parties_total": len(party_options),
         "contracts_total": len(contracts),
@@ -482,6 +853,7 @@ def organization_document_workspace(request, pk):
         "contract_groups": [],
         "no_contract_operations": [],
         "no_contract_documents": [],
+        "relationship_empty": False,
     }
 
     if selected_party is None:
@@ -493,83 +865,229 @@ def organization_document_workspace(request, pk):
 
     party_key = selected_party["key"]
     party_contracts = [
-        item for item in contracts
+        item
+        for item in contracts
         if _relative_party_key(organization, item) == party_key
     ]
     party_documents = [
-        item for item in documents
+        item
+        for item in documents
         if _relative_party_key(organization, item) == party_key
     ]
     party_operations = [
-        item for item in operations
+        item
+        for item in operations
         if _relative_party_key(organization, item) == party_key
     ]
     party_reminders = [
-        item for item in reminders
+        item
+        for item in reminders
         if _relative_party_key(organization, item) == party_key
     ]
 
     docs_by_operation = {}
     for document in party_documents:
         if document.operation_id:
-            docs_by_operation.setdefault(document.operation_id, []).append(document)
+            docs_by_operation.setdefault(
+                document.operation_id,
+                [],
+            ).append(document)
 
     contract_groups = []
     for contract in party_contracts:
         contract_documents = [
-            item for item in party_documents
-            if item.contract_id == contract.pk and item.operation_id is None
+            item
+            for item in party_documents
+            if item.contract_id == contract.pk
+            and item.operation_id is None
         ]
         contract_operations = [
-            item for item in party_operations
+            item
+            for item in party_operations
             if item.contract_id == contract.pk
         ]
         operation_rows = [
             {
                 "object": operation,
-                "documents": docs_by_operation.get(operation.pk, []),
-                "document_count": len(docs_by_operation.get(operation.pk, [])),
+                "documents": docs_by_operation.get(
+                    operation.pk,
+                    [],
+                ),
+                "document_count": len(
+                    docs_by_operation.get(operation.pk, [])
+                ),
             }
             for operation in contract_operations
         ]
-        contract_groups.append({
-            "contract": contract,
-            "documents": contract_documents,
-            "contract_document_count": len(contract_documents)
-                + (1 if contract.main_file else 0),
-            "operations": operation_rows,
-            "operation_count": len(operation_rows),
-        })
+        contract_groups.append(
+            {
+                "contract": contract,
+                "documents": contract_documents,
+                "contract_document_count": (
+                    len(contract_documents)
+                    + (1 if contract.main_file else 0)
+                ),
+                "operations": operation_rows,
+                "operation_count": len(operation_rows),
+            }
+        )
 
-    no_contract_operation_rows = []
-    for operation in party_operations:
-        if operation.contract_id is None:
-            no_contract_operation_rows.append({
-                "object": operation,
-                "documents": docs_by_operation.get(operation.pk, []),
-                "document_count": len(docs_by_operation.get(operation.pk, [])),
-            })
-
-    no_contract_documents = [
-        item for item in party_documents
-        if item.contract_id is None and item.operation_id is None
+    no_contract_operation_rows = [
+        {
+            "object": operation,
+            "documents": docs_by_operation.get(operation.pk, []),
+            "document_count": len(
+                docs_by_operation.get(operation.pk, [])
+            ),
+        }
+        for operation in party_operations
+        if operation.contract_id is None
     ]
 
-    context.update({
-        "selected_contracts_total": len(party_contracts),
-        "selected_documents_total": len(party_documents),
-        "selected_operations_total": len(party_operations),
-        "selected_reminders_total": len(party_reminders),
-        "contract_groups": contract_groups,
-        "no_contract_operations": no_contract_operation_rows,
-        "no_contract_documents": no_contract_documents,
-    })
+    no_contract_documents = [
+        item
+        for item in party_documents
+        if item.contract_id is None
+        and item.operation_id is None
+    ]
+
+    relationship_empty = not (
+        party_contracts
+        or party_documents
+        or party_operations
+        or party_reminders
+    )
+
+    context.update(
+        {
+            "selected_contracts_total": len(party_contracts),
+            "selected_documents_total": len(party_documents),
+            "selected_operations_total": len(party_operations),
+            "selected_reminders_total": len(party_reminders),
+            "contract_groups": contract_groups,
+            "no_contract_operations": no_contract_operation_rows,
+            "no_contract_documents": no_contract_documents,
+            "relationship_empty": relationship_empty,
+        }
+    )
 
     return render(
         request,
         "inventory/documents/organization_workspace.html",
         context,
     )
+
+
+@login_required
+@require_POST
+def organization_party_add(request, pk):
+    organization = get_object_or_404(
+        _organization_queryset(),
+        pk=pk,
+    )
+
+    existing_id = request.POST.get(
+        "existing_counterparty",
+        "",
+    ).strip()
+
+    created = False
+    reused = False
+
+    if existing_id:
+        counterparty = get_object_or_404(
+            Counterparty.objects.filter(archived=False),
+            pk=existing_id,
+        )
+        if counterparty.linked_organization_id == organization.pk:
+            messages.error(
+                request,
+                "Нельзя добавить организацию как вторую сторону самой себе.",
+            )
+            return redirect(
+                "organization_document_workspace",
+                pk=organization.pk,
+            )
+    else:
+        name = request.POST.get("name", "").strip()
+        short_name = request.POST.get(
+            "short_name",
+            "",
+        ).strip()
+        inn = request.POST.get("inn", "").strip()
+        kpp = request.POST.get("kpp", "").strip()
+        email = request.POST.get("email", "").strip()
+
+        if not name:
+            messages.error(
+                request,
+                "Укажите наименование компании или выберите существующую.",
+            )
+            return redirect(
+                "organization_document_workspace",
+                pk=organization.pk,
+            )
+
+        counterparty = _find_existing_counterparty(
+            name=name,
+            inn=inn,
+        )
+        if counterparty is None:
+            counterparty = Counterparty.objects.create(
+                name=name,
+                short_name=short_name,
+                inn=inn,
+                kpp=kpp,
+                email=email,
+            )
+            created = True
+        else:
+            reused = True
+
+    _ensure_party_link(
+        organization,
+        counterparty,
+        request.user,
+    )
+
+    descriptor = _relative_party_descriptor(
+        organization,
+        organization,
+        counterparty,
+    )
+
+    if descriptor is None:
+        messages.error(
+            request,
+            "Не удалось создать связь с этой стороной.",
+        )
+        return redirect(
+            "organization_document_workspace",
+            pk=organization.pk,
+        )
+
+    if created:
+        messages.success(
+            request,
+            f"{counterparty} добавлен. Теперь выберите, что оформляем.",
+        )
+    elif reused:
+        messages.info(
+            request,
+            f"Нашлась существующая карточка {counterparty}. Она подключена без дубля.",
+        )
+    else:
+        messages.success(
+            request,
+            f"{counterparty} подключён к {organization}.",
+        )
+
+    target = reverse(
+        "organization_document_workspace",
+        args=[organization.pk],
+    )
+    target += f"?party={descriptor['key']}"
+    return redirect(target)
 
 
 def _paginate(request, queryset, per_page=50):
@@ -768,21 +1286,57 @@ def document_upload(request):
     initial_counterparty = None
     initial_location = None
     initial_equipment = None
+
     if request.GET.get("operation"):
-        initial_operation = get_object_or_404(DocumentOperation.objects.select_related("organization", "counterparty", "contract", "location"), pk=request.GET["operation"])
+        initial_operation = get_object_or_404(
+            DocumentOperation.objects.select_related(
+                "organization",
+                "counterparty",
+                "contract",
+                "location",
+            ),
+            pk=request.GET["operation"],
+        )
+        initial_organization = initial_operation.organization
+        initial_counterparty = initial_operation.counterparty
+        initial_contract = initial_operation.contract
     elif request.GET.get("contract"):
-        initial_contract = get_object_or_404(Contract.objects.select_related("organization", "counterparty", "location"), pk=request.GET["contract"])
+        initial_contract = get_object_or_404(
+            Contract.objects.select_related(
+                "organization",
+                "counterparty",
+                "location",
+            ),
+            pk=request.GET["contract"],
+        )
+        initial_organization = initial_contract.organization
+        initial_counterparty = initial_contract.counterparty
     elif request.GET.get("equipment"):
-        initial_equipment = get_object_or_404(Equipment.objects.select_related("owner", "location"), pk=request.GET["equipment"], archived=False)
+        initial_equipment = get_object_or_404(
+            Equipment.objects.select_related("owner", "location"),
+            pk=request.GET["equipment"],
+            archived=False,
+        )
+        initial_organization = initial_equipment.owner
     elif request.GET.get("location"):
-        initial_location = get_object_or_404(Location.objects.select_related("organization"), pk=request.GET["location"], archived=False)
+        initial_location = get_object_or_404(
+            Location.objects.select_related("organization"),
+            pk=request.GET["location"],
+            archived=False,
+        )
+        initial_organization = initial_location.organization
     elif request.GET.get("organization"):
-        initial_organization = get_object_or_404(_organization_queryset(), pk=request.GET["organization"])
+        initial_organization = get_object_or_404(
+            _organization_queryset(),
+            pk=request.GET["organization"],
+        )
+
     if request.GET.get("counterparty"):
         initial_counterparty = get_object_or_404(
             Counterparty.objects.filter(archived=False),
             pk=request.GET["counterparty"],
         )
+
     form = DocumentUploadForm(
         request.POST or None,
         request.FILES or None,
@@ -793,16 +1347,65 @@ def document_upload(request):
         initial_location=initial_location,
         initial_equipment=initial_equipment,
     )
+
+    if form.is_bound:
+        if initial_operation is not None:
+            form.initial.update(
+                {
+                    "organization": initial_operation.organization_id,
+                    "counterparty": initial_operation.counterparty_id,
+                    "contract": initial_operation.contract_id,
+                    "operation": initial_operation.pk,
+                    "location": initial_operation.location_id,
+                }
+            )
+        elif initial_contract is not None:
+            form.initial.update(
+                {
+                    "organization": initial_contract.organization_id,
+                    "counterparty": initial_contract.counterparty_id,
+                    "contract": initial_contract.pk,
+                    "location": initial_contract.location_id,
+                }
+            )
+        else:
+            if initial_organization is not None:
+                form.initial["organization"] = initial_organization.pk
+            if initial_counterparty is not None:
+                form.initial["counterparty"] = initial_counterparty.pk
+
+    if initial_organization is not None:
+        form.fields["organization"].disabled = True
+    if initial_counterparty is not None:
+        form.fields["counterparty"].disabled = True
+    if initial_contract is not None:
+        form.fields["contract"].disabled = True
+    if initial_operation is not None:
+        form.fields["operation"].disabled = True
+
     if form.is_valid():
         data = form.cleaned_data
         files = data["files"]
         equipment = list(data["equipment"])
         created = []
+
+        _ensure_party_link(
+            data["organization"],
+            data.get("counterparty"),
+            request.user,
+        )
+
         with transaction.atomic():
             for uploaded in files:
+                document_type = data.get("document_type")
+                if document_type is None:
+                    document_type = _infer_document_type_from_filename(
+                        uploaded.name
+                    )
+
                 document = DocumentRecord.objects.create(
                     organization=data["organization"],
-                    document_type=data.get("document_type"),
+                    document_type=document_type,
                     counterparty=data.get("counterparty"),
                     contract=data.get("contract"),
                     operation=data.get("operation"),
@@ -819,11 +1422,87 @@ def document_upload(request):
                 if equipment:
                     document.equipment.set(equipment)
                 created.append(document)
-        messages.success(request, f"Загружено документов: {len(created)}.")
+
+        messages.success(
+            request,
+            f"Загружено документов: {len(created)}.",
+        )
+
+        viewpoint = request.GET.get("view", "").strip()
+        view_query = (
+            f"?view={viewpoint}"
+            if viewpoint.isdigit()
+            else ""
+        )
+
+        if initial_operation is not None:
+            return redirect(
+                initial_operation.get_absolute_url()
+                + view_query
+            )
+        if initial_contract is not None and len(created) > 1:
+            return redirect(
+                initial_contract.get_absolute_url()
+                + view_query
+            )
         if len(created) == 1:
-            return redirect(created[0])
+            target = created[0].get_absolute_url()
+            if viewpoint.isdigit():
+                target += view_query
+            return redirect(target)
         return redirect("document_list")
-    return render(request, "inventory/documents/document_form.html", {"form": form, "title": "Загрузить документы", "multiple": True})
+
+    if initial_operation is not None:
+        cancel_url = initial_operation.get_absolute_url()
+        if request.GET.get("view", "").isdigit():
+            cancel_url += f"?view={request.GET['view']}"
+    elif initial_contract is not None:
+        cancel_url = initial_contract.get_absolute_url()
+        if request.GET.get("view", "").isdigit():
+            cancel_url += f"?view={request.GET['view']}"
+    elif initial_organization and initial_counterparty:
+        descriptor = _relative_party_descriptor(
+            initial_organization,
+            initial_organization,
+            initial_counterparty,
+        )
+        cancel_url = reverse(
+            "organization_document_workspace",
+            args=[initial_organization.pk],
+        )
+        if descriptor:
+            cancel_url += f"?party={descriptor['key']}"
+    elif initial_organization:
+        cancel_url = reverse(
+            "organization_document_workspace",
+            args=[initial_organization.pk],
+        )
+    elif request.GET.get("view", "").isdigit():
+        cancel_url = reverse(
+            "organization_document_workspace",
+            args=[request.GET["view"]],
+        )
+    else:
+        cancel_url = reverse("document_list")
+
+    context_label = _relationship_context_label(
+        initial_organization,
+        initial_counterparty,
+        initial_contract,
+        initial_operation,
+    )
+
+    return render(
+        request,
+        "inventory/documents/document_form.html",
+        {
+            "form": form,
+            "title": "Загрузить документы",
+            "multiple": True,
+            "cancel_url": cancel_url,
+            "context_label": context_label,
+        },
+    )
 
 
 def _preview_kind(file_field):
@@ -1191,13 +1870,77 @@ def counterparty_detail(request, pk):
 
 @login_required
 def counterparty_form(request, pk=None):
-    obj = get_object_or_404(Counterparty, pk=pk) if pk else None
-    form = CounterpartyForm(request.POST or None, instance=obj)
+    obj = get_object_or_404(
+        Counterparty,
+        pk=pk,
+    ) if pk else None
+    form = CounterpartyForm(
+        request.POST or None,
+        instance=obj,
+    )
+
+    return_url = None
+    organization = None
+    organization_raw = request.GET.get(
+        "organization",
+        "",
+    ).strip()
+    if organization_raw.isdigit():
+        organization = _organization_queryset().filter(
+            pk=int(organization_raw)
+        ).first()
+
+    if organization is not None and obj is not None:
+        descriptor = _relative_party_descriptor(
+            organization,
+            organization,
+            obj,
+        )
+        if descriptor:
+            return_url = reverse(
+                "organization_document_workspace",
+                args=[organization.pk],
+            )
+            return_url += f"?party={descriptor['key']}"
+
     if form.is_valid():
         saved = form.save()
-        messages.success(request, "Контрагент сохранён.")
-        return redirect(saved)
-    return render(request, "inventory/documents/simple_form.html", {"form": form, "title": "Контрагент", "cancel_url": obj.get_absolute_url() if obj else reverse("counterparty_list")})
+        if organization is not None:
+            _ensure_party_link(
+                organization,
+                saved,
+                request.user,
+            )
+        messages.success(
+            request,
+            "Карточка стороны сохранена.",
+        )
+        return redirect(
+            return_url or saved.get_absolute_url()
+        )
+
+    return render(
+        request,
+        "inventory/documents/simple_form.html",
+        {
+            "form": form,
+            "title": "Карточка стороны",
+            "form_eyebrow": "Контрагент",
+            "form_intro": (
+                "Реквизиты компании используются во всех договорах "
+                "и документах. Изменения применяются к одной карточке, "
+                "а не создают дубликат."
+            ),
+            "cancel_url": (
+                return_url
+                or (
+                    obj.get_absolute_url()
+                    if obj
+                    else reverse("counterparty_list")
+                )
+            ),
+        },
+    )
 
 
 @login_required
@@ -1304,22 +2047,122 @@ def contract_detail(request, pk):
 
 @login_required
 def contract_form(request, pk=None):
-    obj = get_object_or_404(Contract, pk=pk) if pk else None
+    obj = get_object_or_404(
+        Contract.objects.select_related(
+            "organization",
+            "counterparty",
+        ),
+        pk=pk,
+    ) if pk else None
+
     initial = {}
+    initial_organization = None
+    initial_counterparty = None
+
     if obj is None and request.GET.get("organization"):
-        initial["organization"] = request.GET["organization"]
+        initial_organization = get_object_or_404(
+            _organization_queryset(),
+            pk=request.GET["organization"],
+        )
+        initial["organization"] = initial_organization.pk
+
     if obj is None and request.GET.get("counterparty"):
-        initial["counterparty"] = request.GET["counterparty"]
-    form = ContractForm(request.POST or None, request.FILES or None, instance=obj, initial=initial)
+        initial_counterparty = get_object_or_404(
+            Counterparty.objects.filter(archived=False),
+            pk=request.GET["counterparty"],
+        )
+        initial["counterparty"] = initial_counterparty.pk
+
+    form = ContractForm(
+        request.POST or None,
+        request.FILES or None,
+        instance=obj,
+        initial=initial,
+    )
+
+    if obj is None:
+        if initial_organization is not None:
+            form.fields["organization"].disabled = True
+        if initial_counterparty is not None:
+            form.fields["counterparty"].disabled = True
+
+    if obj is not None:
+        context_organization = obj.organization
+        context_counterparty = obj.counterparty
+    else:
+        context_organization = initial_organization
+        context_counterparty = initial_counterparty
+
+    relationship_url = None
+    if context_organization and context_counterparty:
+        descriptor = _relative_party_descriptor(
+            context_organization,
+            context_organization,
+            context_counterparty,
+        )
+        if descriptor:
+            relationship_url = reverse(
+                "organization_document_workspace",
+                args=[context_organization.pk],
+            )
+            relationship_url += f"?party={descriptor['key']}"
+
     if form.is_valid():
         saved = form.save(commit=False)
         if saved.pk is None:
             saved.created_by = request.user
         saved.save()
         form.save_m2m()
-        messages.success(request, "Договор сохранён.")
-        return redirect(saved)
-    return render(request, "inventory/documents/simple_form.html", {"form": form, "title": "Договор", "cancel_url": obj.get_absolute_url() if obj else reverse("contract_list"), "multipart": True})
+
+        _ensure_party_link(
+            saved.organization,
+            saved.counterparty,
+            request.user,
+        )
+
+        messages.success(
+            request,
+            "Договор сохранён.",
+        )
+
+        target = saved.get_absolute_url()
+        viewpoint = request.GET.get("view", "").strip()
+        if viewpoint.isdigit():
+            target += f"?view={viewpoint}"
+        return redirect(target)
+
+    cancel_url = (
+        obj.get_absolute_url()
+        if obj
+        else relationship_url
+        or reverse("contract_list")
+    )
+
+    return render(
+        request,
+        "inventory/documents/simple_form.html",
+        {
+            "form": form,
+            "title": (
+                "Изменить договор"
+                if obj
+                else "Новый договор"
+            ),
+            "form_eyebrow": "Договор",
+            "form_intro": (
+                "Стороны уже подставлены из текущего контекста. "
+                "Заполните только реквизиты самого договора."
+                if relationship_url and obj is None
+                else "Карточка договора, сроки, ответственный и основной файл."
+            ),
+            "context_label": _relationship_context_label(
+                context_organization,
+                context_counterparty,
+            ),
+            "cancel_url": cancel_url,
+            "multipart": True,
+        },
+    )
 
 
 @login_required

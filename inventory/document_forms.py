@@ -41,6 +41,54 @@ class CounterpartyForm(StyledFormMixin, forms.ModelForm):
         self.fields["linked_organization"].empty_label = "Внешний контрагент"
         self.fields["linked_organization"].help_text = "Заполняйте только если эта сторона является нашей внутренней организацией."
 
+    def clean(self):
+        data = super().clean()
+        name = (data.get("name") or "").strip()
+        short_name = (data.get("short_name") or "").strip()
+        inn = (data.get("inn") or "").strip()
+
+        def key(value):
+            return "".join(
+                char
+                for char in value.casefold()
+                if char.isalnum()
+            )
+
+        qs = Counterparty.objects.all()
+        if self.instance.pk:
+            qs = qs.exclude(pk=self.instance.pk)
+
+        if inn and qs.filter(inn=inn).exists():
+            self.add_error(
+                "inn",
+                "Контрагент с таким ИНН уже существует.",
+            )
+
+        name_keys = {
+            value
+            for value in (key(name), key(short_name))
+            if value
+        }
+        if name_keys:
+            for existing in qs.only("name", "short_name"):
+                existing_keys = {
+                    value
+                    for value in (
+                        key(existing.name or ""),
+                        key(existing.short_name or ""),
+                    )
+                    if value
+                }
+                if name_keys & existing_keys:
+                    self.add_error(
+                        "name",
+                        f"Похожая сторона уже существует: {existing}. "
+                        "Откройте существующую карточку вместо создания дубля.",
+                    )
+                    break
+
+        return data
+
 
 class ContractForm(StyledFormMixin, forms.ModelForm):
     class Meta:
@@ -106,6 +154,8 @@ class DocumentOperationForm(StyledFormMixin, forms.ModelForm):
         self.fields["counterparty"].queryset = Counterparty.objects.filter(archived=False)
         self.fields["contract"].queryset = Contract.objects.filter(archived=False).select_related("organization", "counterparty")
         self.fields["location"].queryset = Location.objects.filter(archived=False).select_related("organization")
+        self.fields["counterparty"].label = "Вторая сторона"
+        self.fields["contract"].label = "Договор (необязательно)"
         self.fields["counterparty"].empty_label = "Не указан"
         self.fields["contract"].empty_label = "Без договора"
         self.fields["location"].empty_label = "Не связан"
@@ -147,9 +197,9 @@ class DocumentUploadForm(StyledFormMixin, forms.Form):
     organization = forms.ModelChoiceField(label="Организация", queryset=Organization.objects.none())
     files = MultipleFileField(label="Файлы", validators=[validate_business_document])
     document_type = forms.ModelChoiceField(label="Тип документа", queryset=DocumentType.objects.none(), required=False)
-    counterparty = forms.ModelChoiceField(label="Контрагент", queryset=Counterparty.objects.none(), required=False)
+    counterparty = forms.ModelChoiceField(label="Вторая сторона", queryset=Counterparty.objects.none(), required=False)
     contract = forms.ModelChoiceField(label="Договор", queryset=Contract.objects.none(), required=False)
-    operation = forms.ModelChoiceField(label="Операция", queryset=DocumentOperation.objects.none(), required=False)
+    operation = forms.ModelChoiceField(label="Пакет / операция", queryset=DocumentOperation.objects.none(), required=False)
     location = forms.ModelChoiceField(label="Объект", queryset=Location.objects.none(), required=False)
     equipment = forms.ModelMultipleChoiceField(
         label="Оборудование", queryset=Equipment.objects.none(), required=False, widget=forms.SelectMultiple(attrs={"size": 7})

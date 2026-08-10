@@ -2,44 +2,126 @@
 {% block title %}{{ object.title }} — FOX Inventory{% endblock %}
 {% block content %}
 <a class="back-link" href="{{ relationship_back_url }}">← {{ viewpoint }} ↔ {{ other_party.name }}</a>
+
+<nav class="document-breadcrumbs">
+  <a href="{{ relationship_back_url }}">{{ viewpoint }}</a>
+  <span>↔</span>
+  <a href="{{ relationship_back_url }}">{{ other_party.name }}</a>
+  <span>›</span>
+  <strong>{{ object }}</strong>
+</nav>
+
 <div class="page-head">
   <div>
     <span class="eyebrow">{{ object.get_category_display }}</span>
     <h1>{{ object }}</h1>
-    <p class="muted">{% if object.contract_date %}от {{ object.contract_date|date:"d.m.Y" }}{% endif %}</p>
+    <p class="muted">{% if object.contract_date %}от {{ object.contract_date|date:"d.m.Y" }}{% endif %} · {{ object.status_label }}</p>
   </div>
-  <div class="actions"><a class="btn" href="{% url 'operation_add' %}?contract={{ object.pk }}">+ Операция</a><a class="btn" href="{% url 'document_upload' %}?contract={{ object.pk }}">+ Документ договора</a><a class="btn primary" href="{% url 'contract_edit' object.pk %}">Изменить</a></div>
+  <div class="actions">
+    <a class="btn" href="{% url 'operation_add' %}?contract={{ object.pk }}&view={{ viewpoint.pk }}">+ Пакет исполнения</a>
+    <a class="btn" href="{% url 'document_upload' %}?contract={{ object.pk }}&view={{ viewpoint.pk }}">+ Документ договора</a>
+    <a class="btn primary" href="{% url 'contract_edit' object.pk %}?view={{ viewpoint.pk }}">Изменить</a>
+  </div>
 </div>
+
 {% include "inventory/documents/_nav.html" %}
 
-<section class="relationship-hero compact">
+<section class="relationship-hero compact relationship-hero-v2">
   <div class="relationship-side active-side"><small>Вы смотрите от лица</small><b>{{ viewpoint }}</b></div>
   <div class="relationship-route-arrow">↔</div>
   <div class="relationship-side"><small>{% if other_party.internal %}Наша организация{% else %}Контрагент{% endif %}</small><b>{{ other_party.name }}</b></div>
 </section>
 
+<div class="contract-overview-grid">
+  <section class="card contract-file-card {% if object.main_file %}has-file{% endif %}">
+    <div>
+      <span class="eyebrow">Основной договор</span>
+      {% if object.main_file %}
+        <h2>{{ object }}</h2>
+        <p class="muted">Файл хранится в системе и открывается тем же просмотрщиком, что счета и УПД.</p>
+      {% else %}
+        <h2>Файл договора не загружен</h2>
+        <p class="muted">Карточка договора есть, но оригинал или скан пока не приложен.</p>
+      {% endif %}
+    </div>
+    <div class="actions">
+      {% if object.main_file %}
+        <a class="btn primary" href="{% url 'contract_file_view' object.pk %}?view={{ viewpoint.pk }}">Просмотреть договор</a>
+      {% endif %}
+      <a class="btn" href="{% url 'contract_edit' object.pk %}?view={{ viewpoint.pk }}">{% if object.main_file %}Заменить файл{% else %}Добавить файл{% endif %}</a>
+    </div>
+  </section>
+
+  <section class="card contract-facts-card">
+    <dl class="details compact-details">
+      <dt>Номер</dt><dd>{{ object.number|default:"—" }}</dd>
+      <dt>Дата</dt><dd>{{ object.contract_date|date:"d.m.Y"|default:"—" }}</dd>
+      <dt>Период</dt><dd>{% if object.starts_at %}с {{ object.starts_at|date:"d.m.Y" }}{% endif %}{% if object.indefinite %} · бессрочный{% elif object.ends_at %} по {{ object.ends_at|date:"d.m.Y" }}{% else %}—{% endif %}</dd>
+      <dt>Объект</dt><dd>{% if object.location %}<a href="{{ object.location.get_absolute_url }}">{{ object.location }}</a>{% else %}—{% endif %}</dd>
+      <dt>Ответственный</dt><dd>{% if object.responsible_employee %}<a href="{{ object.responsible_employee.get_absolute_url }}">{{ object.responsible_employee }}</a>{% else %}—{% endif %}</dd>
+    </dl>
+  </section>
+</div>
+
 <section class="card">
-  <div class="section-head"><div><h2>Операции по договору</h2><p class="muted">Каждая операция объединяет документы одного события: поставки, периода услуг или этапа работ.</p></div><a class="btn small" href="{% url 'operation_add' %}?contract={{ object.pk }}">+ Операция</a></div>
-  <div class="operation-grid">
+  <div class="section-head">
+    <div>
+      <h2>Пакеты исполнения</h2>
+      <p class="muted">Поставка, период услуг или этап работ. Внутри пакета лежат конкретные счета, УПД и акты.</p>
+    </div>
+    <a class="btn small" href="{% url 'operation_add' %}?contract={{ object.pk }}&view={{ viewpoint.pk }}">+ Новый пакет</a>
+  </div>
+
+  <div class="operation-grid operation-grid-v2">
     {% for item in operations %}
       <a class="operation-card" href="{{ item.get_absolute_url }}?view={{ viewpoint.pk }}">
         <div class="operation-card-date">{{ item.operation_date|date:"d.m.Y"|default:"Без даты" }}</div>
-        <div class="operation-card-main"><b>{{ item.title }}</b><small>{% if item.location %}{{ item.location }}{% else %}{{ object.counterparty }}{% endif %}</small></div>
+        <div class="operation-card-main">
+          <b>{{ item.title }}</b>
+          <small>{% if item.location %}{{ item.location }}{% else %}{{ other_party.name }}{% endif %}</small>
+        </div>
         <div class="operation-card-count"><b>{{ item.document_count }}</b><span>док.</span></div>
       </a>
-    {% empty %}<p class="muted">Операций по договору пока нет.</p>{% endfor %}
+    {% empty %}
+      <div class="empty-workspace-card small-empty">
+        <h3>Исполнения пока нет</h3>
+        <p>Создайте первый пакет, затем перетащите внутрь счёт, УПД, акт и другие документы.</p>
+        <a class="btn primary" href="{% url 'operation_add' %}?contract={{ object.pk }}&view={{ viewpoint.pk }}">Создать пакет</a>
+      </div>
+    {% endfor %}
   </div>
 </section>
 
 <div class="grid two">
-  <section class="card"><h2>Договор</h2><dl class="details"><dt>Номер</dt><dd>{{ object.number|default:"—" }}</dd><dt>Дата</dt><dd>{{ object.contract_date|date:"d.m.Y"|default:"—" }}</dd><dt>Период</dt><dd>{% if object.starts_at %}с {{ object.starts_at|date:"d.m.Y" }}{% endif %}{% if object.indefinite %} · бессрочный{% elif object.ends_at %} по {{ object.ends_at|date:"d.m.Y" }}{% endif %}</dd><dt>Объект</dt><dd>{% if object.location %}<a href="{{ object.location.get_absolute_url }}">{{ object.location }}</a>{% else %}—{% endif %}</dd><dt>Ответственный</dt><dd>{% if object.responsible_employee %}<a href="{{ object.responsible_employee.get_absolute_url }}">{{ object.responsible_employee }}</a>{% else %}—{% endif %}</dd><dt>Комментарий</dt><dd>{{ object.notes|default:"—"|linebreaksbr }}</dd></dl>{% if object.main_file %}<a class="btn" href="{% url 'contract_file_view' object.pk %}?view={{ viewpoint.pk }}">Просмотреть основной договор</a>{% endif %}</section>
-  <section class="card"><div class="section-head"><h2>Напоминания</h2><a href="{% url 'reminder_add' %}?contract={{ object.pk }}">+ Добавить</a></div>{% for row in reminder_rows %}<div class="reminder-row {{ row.state }}"><div class="reminder-date"><b>{{ row.due|date:"d" }}</b><span>{{ row.due|date:"M" }}</span></div><div class="reminder-main"><b>{{ row.reminder.title }}</b><small>{{ row.reminder.get_recurrence_display }}{% if row.reminder.amount %} · {{ row.reminder.amount }} ₽{% endif %}</small></div><a class="text-button" href="{% url 'reminder_edit' row.reminder.pk %}">Изменить</a></div>{% empty %}<p class="muted">Напоминаний нет.</p>{% endfor %}</section>
+  <section class="card">
+    <div class="section-head">
+      <div><h2>Документы договора</h2><p class="muted">Дополнительные соглашения, приложения и спецификации общего действия.</p></div>
+      <a href="{% url 'document_upload' %}?contract={{ object.pk }}&view={{ viewpoint.pk }}">+ Добавить</a>
+    </div>
+    {% for item in contract_documents %}
+      <a class="row-link" href="{{ item.get_absolute_url }}?view={{ viewpoint.pk }}">
+        <span><b>{{ item.display_title }}</b><small>{{ item.document_type|default:"Документ" }} · {{ item.original_name }}</small></span>
+        <small>{{ item.document_date|date:"d.m.Y"|default:"—" }} →</small>
+      </a>
+    {% empty %}<p class="muted">Отдельных документов договора нет.</p>{% endfor %}
+  </section>
+
+  <section class="card">
+    <div class="section-head">
+      <div><h2>Напоминания</h2><p class="muted">Сроки договора и регулярные контрольные даты.</p></div>
+      <a href="{% url 'reminder_add' %}?contract={{ object.pk }}">+ Добавить</a>
+    </div>
+    {% for row in reminder_rows %}
+      <div class="reminder-row {{ row.state }}">
+        <div class="reminder-date"><b>{{ row.due|date:"d" }}</b><span>{{ row.due|date:"M" }}</span></div>
+        <div class="reminder-main"><b>{{ row.reminder.title }}</b><small>{{ row.reminder.get_recurrence_display }}{% if row.reminder.amount %} · {{ row.reminder.amount }} ₽{% endif %}</small></div>
+        <a class="text-button" href="{% url 'reminder_edit' row.reminder.pk %}">Изменить</a>
+      </div>
+    {% empty %}<p class="muted">Напоминаний нет.</p>{% endfor %}
+  </section>
 </div>
 
-<section class="card">
-  <div class="section-head"><div><h2>Документы договора</h2><p class="muted">Условия, приложения и дополнительные соглашения. Документы исполнения находятся в операциях выше.</p></div><a class="btn small" href="{% url 'document_upload' %}?contract={{ object.pk }}">+ Документ</a></div>
-  {% for item in contract_documents %}
-    <a class="row-link" href="{{ item.get_absolute_url }}?view={{ viewpoint.pk }}"><span><b>{{ item.display_title }}</b><small>{{ item.document_type|default:"Документ" }} · {{ item.original_name }}</small></span><small>{{ item.document_date|date:"d.m.Y"|default:"—" }}</small></a>
-  {% empty %}<p class="muted">Отдельных документов договора нет.</p>{% endfor %}
-</section>
+{% if object.notes %}
+<section class="card"><h2>Комментарий</h2><p>{{ object.notes|linebreaksbr }}</p></section>
+{% endif %}
 {% endblock %}
