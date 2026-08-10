@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}{{ title }} — FOX Inventory{% endblock %}
+{% block content %}
+<a class="back-link" href="{{ cancel_url }}">← Назад</a>
+<div class="page-head"><div><span class="eyebrow">Документы</span><h1>{{ title }}</h1><p class="muted">Одна операция объединяет документы, относящиеся к одному событию: поставке, услуге, оплате или этапу работ.</p></div></div>
+<section class="card form-card">
+  {% if selected_documents %}
+    <div class="operation-selected-note"><b>Будет объединено документов: {{ selected_documents|length }}</b><span>После сохранения они появятся единым пакетом.</span></div>
+  {% endif %}
+  <form method="post">
+    {% csrf_token %}
+    {% for document in selected_documents %}<input type="hidden" name="selected_documents" value="{{ document.pk }}">{% endfor %}
+    {{ form.as_p }}
+    <div class="actions"><a class="btn" href="{{ cancel_url }}">Отмена</a><button class="btn primary" type="submit">Сохранить операцию</button></div>
+  </form>
+</section>
+{% endblock %}

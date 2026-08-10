@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.2.2 — 2026-08-10
+
+- Added document operations as a package layer between contracts and individual files.
+- One operation can contain invoices, UPDs, acts, waybills and related documents for one event.
+- Contract-level documents such as addenda and general specifications remain outside operations.
+- Existing transactional documents are grouped automatically on migration using contract category and date.
+- Organization and contract workspaces now prioritize operations instead of flat document lists.
+- Added "collect into operation" action for selected documents.
+- New documents can be uploaded directly into an operation.
+
 ## 1.2.1 — 2026-08-10
 
 - Document Center is now organization-centric: each organization has its own workspace.

@@ -5,6 +5,7 @@ from django.utils import timezone
 from .models import (
     Contract,
     Counterparty,
+    DocumentOperation,
     DocumentRecord,
     DocumentType,
     Employee,
@@ -81,6 +82,47 @@ class ContractForm(StyledFormMixin, forms.ModelForm):
         return data
 
 
+
+class DocumentOperationForm(StyledFormMixin, forms.ModelForm):
+    class Meta:
+        model = DocumentOperation
+        fields = ["organization", "counterparty", "contract", "title", "operation_date", "amount", "location", "notes"]
+        widgets = {
+            "operation_date": forms.DateInput(attrs={"type": "date"}),
+            "notes": forms.Textarea(attrs={"rows": 3}),
+        }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.apply_styles()
+        self.fields["amount"].localize = True
+        self.fields["organization"].queryset = Organization.objects.filter(archived=False, kind=Organization.Kind.COMPANY)
+        self.fields["counterparty"].queryset = Counterparty.objects.filter(archived=False)
+        self.fields["contract"].queryset = Contract.objects.filter(archived=False).select_related("organization", "counterparty")
+        self.fields["location"].queryset = Location.objects.filter(archived=False).select_related("organization")
+        self.fields["counterparty"].empty_label = "Не указан"
+        self.fields["contract"].empty_label = "Без договора"
+        self.fields["location"].empty_label = "Не связан"
+
+    def clean(self):
+        data = super().clean()
+        organization = data.get("organization")
+        counterparty = data.get("counterparty")
+        contract = data.get("contract")
+        location = data.get("location")
+        if contract:
+            data["organization"] = contract.organization
+            if not counterparty:
+                data["counterparty"] = contract.counterparty
+            elif counterparty.pk != contract.counterparty_id:
+                self.add_error("counterparty", "Контрагент не совпадает с контрагентом договора.")
+            if not location and contract.location_id:
+                data["location"] = contract.location
+        if location and data.get("organization") and location.organization_id != data["organization"].id:
+            self.add_error("location", "Объект относится к другой организации.")
+        return data
+
+
 class MultipleFileInput(forms.ClearableFileInput):
     allow_multiple_selected = True
 
@@ -101,6 +143,7 @@ class DocumentUploadForm(StyledFormMixin, forms.Form):
     document_type = forms.ModelChoiceField(label="Тип документа", queryset=DocumentType.objects.none(), required=False)
     counterparty = forms.ModelChoiceField(label="Контрагент", queryset=Counterparty.objects.none(), required=False)
     contract = forms.ModelChoiceField(label="Договор", queryset=Contract.objects.none(), required=False)
+    operation = forms.ModelChoiceField(label="Операция", queryset=DocumentOperation.objects.none(), required=False)
     location = forms.ModelChoiceField(label="Объект", queryset=Location.objects.none(), required=False)
     equipment = forms.ModelMultipleChoiceField(
         label="Оборудование", queryset=Equipment.objects.none(), required=False, widget=forms.SelectMultiple(attrs={"size": 7})
@@ -111,7 +154,7 @@ class DocumentUploadForm(StyledFormMixin, forms.Form):
     title = forms.CharField(label="Название", max_length=255, required=False, help_text="Можно оставить пустым — будет использован тип документа.")
     notes = forms.CharField(label="Комментарий", required=False, widget=forms.Textarea(attrs={"rows": 3}))
 
-    def __init__(self, *args, initial_contract=None, initial_organization=None, initial_location=None, initial_equipment=None, **kwargs):
+    def __init__(self, *args, initial_contract=None, initial_operation=None, initial_organization=None, initial_location=None, initial_equipment=None, **kwargs):
         super().__init__(*args, **kwargs)
         self.apply_styles()
         self.fields["amount"].localize = True
@@ -119,15 +162,19 @@ class DocumentUploadForm(StyledFormMixin, forms.Form):
         self.fields["document_type"].queryset = DocumentType.objects.filter(archived=False)
         self.fields["counterparty"].queryset = Counterparty.objects.filter(archived=False)
         self.fields["contract"].queryset = Contract.objects.filter(archived=False).select_related("organization", "counterparty")
+        self.fields["operation"].queryset = DocumentOperation.objects.select_related("organization", "counterparty", "contract")
         self.fields["location"].queryset = Location.objects.filter(archived=False).select_related("organization")
         self.fields["equipment"].queryset = Equipment.objects.filter(archived=False).select_related("owner", "category")
         self.fields["document_type"].empty_label = "Неразобранное"
         self.fields["counterparty"].empty_label = "Не указан"
         self.fields["contract"].empty_label = "Не привязан"
+        self.fields["operation"].empty_label = "Вне операции"
         self.fields["location"].empty_label = "Не связан"
         self.fields["document_date"].initial = None
         if not self.is_bound:
-            if initial_contract is not None:
+            if initial_operation is not None:
+                self.initial.update({"operation": initial_operation.pk, "contract": initial_operation.contract_id, "organization": initial_operation.organization_id, "counterparty": initial_operation.counterparty_id, "location": initial_operation.location_id})
+            elif initial_contract is not None:
                 self.initial.update({
                     "contract": initial_contract.pk,
                     "organization": initial_contract.organization_id,
@@ -149,9 +196,19 @@ class DocumentUploadForm(StyledFormMixin, forms.Form):
         data = super().clean()
         organization = data.get("organization")
         contract = data.get("contract")
+        operation = data.get("operation")
         counterparty = data.get("counterparty")
         location = data.get("location")
         equipment = data.get("equipment")
+        if operation:
+            if organization and operation.organization_id != organization.id:
+                self.add_error("operation", "Операция относится к другой организации.")
+            if contract and operation.contract_id != contract.id:
+                self.add_error("operation", "Операция относится к другому договору.")
+            if not contract and operation.contract_id:
+                data["contract"] = operation.contract
+            if not counterparty and operation.counterparty_id:
+                data["counterparty"] = operation.counterparty
         if contract:
             if organization and contract.organization_id != organization.id:
                 self.add_error("contract", "Договор относится к другой организации.")
@@ -180,7 +237,7 @@ class DocumentEditForm(StyledFormMixin, forms.ModelForm):
     class Meta:
         model = DocumentRecord
         fields = [
-            "organization", "document_type", "counterparty", "contract", "location", "equipment",
+            "organization", "document_type", "counterparty", "contract", "operation", "location", "equipment",
             "title", "number", "document_date", "amount", "file", "notes",
         ]
         widgets = {
@@ -197,11 +254,13 @@ class DocumentEditForm(StyledFormMixin, forms.ModelForm):
         self.fields["document_type"].queryset = DocumentType.objects.filter(archived=False)
         self.fields["counterparty"].queryset = Counterparty.objects.filter(archived=False)
         self.fields["contract"].queryset = Contract.objects.filter(archived=False).select_related("organization", "counterparty")
+        self.fields["operation"].queryset = DocumentOperation.objects.select_related("organization", "counterparty", "contract")
         self.fields["location"].queryset = Location.objects.filter(archived=False).select_related("organization")
         self.fields["equipment"].queryset = Equipment.objects.filter(archived=False).select_related("owner", "category")
         self.fields["document_type"].empty_label = "Неразобранное"
         self.fields["counterparty"].empty_label = "Не указан"
         self.fields["contract"].empty_label = "Не привязан"
+        self.fields["operation"].empty_label = "Вне операции"
         self.fields["location"].empty_label = "Не связан"
 
     def clean(self):

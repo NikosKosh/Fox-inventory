@@ -22,6 +22,7 @@ from .document_forms import (
     ContractForm,
     CounterpartyForm,
     DocumentEditForm,
+    DocumentOperationForm,
     DocumentTypeForm,
     DocumentUploadForm,
     InboxUploadForm,
@@ -30,6 +31,7 @@ from .document_forms import (
 from .models import (
     Contract,
     Counterparty,
+    DocumentOperation,
     DocumentRecord,
     DocumentType,
     Equipment,
@@ -111,33 +113,36 @@ def organization_document_workspace(request, pk):
         "organization", "counterparty", "location", "responsible_employee"
     ).annotate(
         document_count=Count("documents", filter=Q(documents__trashed_at__isnull=True), distinct=True),
-        reminder_count=Count("reminders", filter=Q(reminders__active=True), distinct=True),
+        operation_count=Count("operations", distinct=True),
     )
     documents = _documents_for_organization(organization).select_related(
-        "organization", "document_type", "counterparty", "contract", "location"
+        "organization", "document_type", "counterparty", "contract", "operation", "location"
+    )
+    operations = _operations_for_organization(organization).select_related(
+        "organization", "counterparty", "contract", "location"
+    ).annotate(
+        document_count=Count("documents", filter=Q(documents__trashed_at__isnull=True), distinct=True)
     )
     reminders = _reminders_for_organization(organization).select_related(
         "organization", "counterparty", "contract", "location"
     )
-    linked_counterparties = _counterparty_ids_for_organization(organization)
     related_counterparties = Counterparty.objects.filter(
         Q(contracts__in=contracts) | Q(documents__in=documents)
     ).distinct()
-
     return render(request, "inventory/documents/organization_workspace.html", {
         "organization": organization,
         "organizations": _organization_queryset(),
         "contracts": contracts[:50],
+        "operations": operations[:50],
+        "operations_total": operations.count(),
         "contracts_total": contracts.count(),
         "documents_total": documents.count(),
         "counterparties_total": related_counterparties.count(),
         "reminders_total": reminders.count(),
-        "recent_documents": documents.order_by("-document_date", "-created_at", "-pk")[:12],
-        "unlinked_documents": documents.filter(contract__isnull=True).order_by("-document_date", "-created_at")[:12],
+        "ungrouped_documents": documents.filter(operation__isnull=True).order_by("-document_date", "-created_at")[:20],
+        "no_contract_operations": operations.filter(contract__isnull=True)[:12],
         "reminder_rows": reminder_rows(reminders.order_by("next_due_date", "pk")[:8]),
-        "linked_counterparty_ids": linked_counterparties,
     })
-
 
 def _paginate(request, queryset, per_page=50):
     paginator = Paginator(queryset, per_page)
@@ -257,7 +262,7 @@ def document_center(request):
 @login_required
 def document_list(request):
     qs = DocumentRecord.objects.filter(trashed_at__isnull=True).select_related(
-        "organization", "document_type", "counterparty", "contract", "location"
+        "organization", "document_type", "counterparty", "contract", "operation", "location"
     )
     q = request.GET.get("q", "").strip()
     organization = request.GET.get("organization", "").strip()
@@ -269,7 +274,7 @@ def document_list(request):
         qs = qs.filter(
             Q(title__icontains=q) | Q(number__icontains=q) | Q(original_name__icontains=q)
             | Q(notes__icontains=q) | Q(counterparty__name__icontains=q)
-            | Q(contract__title__icontains=q) | Q(contract__number__icontains=q)
+            | Q(contract__title__icontains=q) | Q(contract__number__icontains=q) | Q(operation__title__icontains=q)
         )
     if organization:
         qs = qs.filter(organization_id=organization)
@@ -330,10 +335,13 @@ def document_inbox(request):
 @login_required
 def document_upload(request):
     initial_contract = None
+    initial_operation = None
     initial_organization = None
     initial_location = None
     initial_equipment = None
-    if request.GET.get("contract"):
+    if request.GET.get("operation"):
+        initial_operation = get_object_or_404(DocumentOperation.objects.select_related("organization", "counterparty", "contract", "location"), pk=request.GET["operation"])
+    elif request.GET.get("contract"):
         initial_contract = get_object_or_404(Contract.objects.select_related("organization", "counterparty", "location"), pk=request.GET["contract"])
     elif request.GET.get("equipment"):
         initial_equipment = get_object_or_404(Equipment.objects.select_related("owner", "location"), pk=request.GET["equipment"], archived=False)
@@ -345,6 +353,7 @@ def document_upload(request):
         request.POST or None,
         request.FILES or None,
         initial_contract=initial_contract,
+        initial_operation=initial_operation,
         initial_organization=initial_organization,
         initial_location=initial_location,
         initial_equipment=initial_equipment,
@@ -361,6 +370,7 @@ def document_upload(request):
                     document_type=data.get("document_type"),
                     counterparty=data.get("counterparty"),
                     contract=data.get("contract"),
+                    operation=data.get("operation"),
                     location=data.get("location"),
                     title=data.get("title", ""),
                     number=data.get("number", ""),
@@ -384,7 +394,7 @@ def document_upload(request):
 @login_required
 def document_detail(request, pk):
     obj = get_object_or_404(
-        DocumentRecord.objects.select_related("organization", "document_type", "counterparty", "contract", "location", "created_by").prefetch_related("equipment"),
+        DocumentRecord.objects.select_related("organization", "document_type", "counterparty", "contract", "operation", "location", "created_by").prefetch_related("equipment"),
         pk=pk,
         trashed_at__isnull=True,
     )
@@ -517,33 +527,25 @@ def contract_list(request):
 
 @login_required
 def contract_detail(request, pk):
-    obj = get_object_or_404(Contract.objects.select_related("organization", "counterparty", "location", "responsible_employee", "created_by"), pk=pk)
-    documents = list(
-        obj.documents.filter(trashed_at__isnull=True)
+    obj = get_object_or_404(
+        Contract.objects.select_related("organization", "counterparty", "location", "responsible_employee", "created_by"),
+        pk=pk,
+    )
+    operations = obj.operations.select_related("organization", "counterparty", "location").annotate(
+        document_count=Count("documents", filter=Q(documents__trashed_at__isnull=True), distinct=True)
+    )
+    contract_documents = (
+        obj.documents.filter(trashed_at__isnull=True, operation__isnull=True)
         .select_related("document_type", "organization", "counterparty")
         .order_by("-document_date", "-created_at", "-pk")
     )
-    period_map = {}
-    document_periods = []
-    for document in documents:
-        if document.document_date:
-            key = (document.document_date.year, document.document_date.month)
-            label = date_format(document.document_date, "F Y")
-        else:
-            key = (0, 0)
-            label = "Без даты"
-        if key not in period_map:
-            period_map[key] = {"label": label, "documents": []}
-            document_periods.append(period_map[key])
-        period_map[key]["documents"].append(document)
     reminders = obj.reminders.filter(active=True).select_related("organization", "counterparty", "location")
     return render(request, "inventory/documents/contract_detail.html", {
         "object": obj,
-        "documents": documents,
-        "document_periods": document_periods,
+        "operations": operations,
+        "contract_documents": contract_documents,
         "reminder_rows": reminder_rows(reminders),
     })
-
 
 @login_required
 def contract_form(request, pk=None):

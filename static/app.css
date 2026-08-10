@@ -356,3 +356,32 @@ a{color:inherit}
   .document-context-bar{align-items:stretch;flex-direction:column}
   .document-context-bar .input{max-width:none;width:100%}
 }
+
+/* FOX Inventory 1.2.2 — document operations */
+.operation-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:10px}
+.operation-card{display:grid;grid-template-columns:96px 1fr auto;gap:14px;align-items:center;padding:15px 16px;border:1px solid var(--border);border-radius:14px;background:var(--surface-2);color:inherit;text-decoration:none;transition:.15s ease}
+.operation-card:hover{border-color:var(--accent);transform:translateY(-1px)}
+.operation-card-date{font-variant-numeric:tabular-nums;color:var(--muted);font-size:13px}
+.operation-card-main{display:flex;flex-direction:column;gap:4px;min-width:0}
+.operation-card-main b{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.operation-card-main small{color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.operation-card-count{display:flex;align-items:baseline;gap:4px;color:var(--muted)}
+.operation-card-count b{font-size:19px;color:var(--text)}
+.operation-summary-card{display:flex;flex-direction:column;align-items:flex-start;justify-content:center}
+.operation-summary-card strong{font-size:42px;line-height:1;color:var(--accent);margin:7px 0 3px}
+.operation-documents{display:flex;flex-direction:column}
+.operation-document-row{display:grid;grid-template-columns:150px minmax(260px,1fr) 110px 130px;gap:14px;align-items:center;padding:12px 4px;border-top:1px solid var(--border);color:inherit;text-decoration:none}
+.operation-document-row:first-child{border-top:0}
+.operation-document-row:hover .operation-document-main b{color:var(--accent)}
+.operation-document-main{display:flex;flex-direction:column;gap:3px;min-width:0}
+.operation-document-main small{color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bulk-operation-bar{display:flex;justify-content:flex-end;align-items:center;gap:12px;margin:10px 0;color:var(--muted);font-size:13px}
+.select-col{width:34px;text-align:center}
+.operation-selected-note{display:flex;flex-direction:column;gap:4px;padding:12px 14px;margin-bottom:16px;border:1px solid color-mix(in srgb,var(--accent) 35%,var(--border));border-radius:12px;background:var(--accent-soft)}
+.operation-selected-note span{color:var(--muted);font-size:13px}
+@media(max-width:800px){
+  .operation-card{grid-template-columns:1fr auto}
+  .operation-card-date{grid-column:1/-1}
+  .operation-document-row{grid-template-columns:1fr}
+  .operation-document-row>.numeric-col{text-align:left}
+}

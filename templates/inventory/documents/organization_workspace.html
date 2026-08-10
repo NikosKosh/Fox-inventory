@@ -7,9 +7,10 @@
   <div>
     <span class="eyebrow">Документы / Организация</span>
     <h1>{{ organization }}</h1>
-    <p class="muted">Договоры и документы, в которых организация является одной из сторон.</p>
+    <p class="muted">Договоры, операции и документы, в которых организация является одной из сторон.</p>
   </div>
   <div class="actions">
+    <a class="btn" href="{% url 'operation_add' %}?organization={{ organization.pk }}">+ Операция</a>
     <a class="btn" href="{% url 'contract_add' %}?organization={{ organization.pk }}">+ Договор</a>
     <a class="btn primary" href="{% url 'document_upload' %}?organization={{ organization.pk }}">+ Документ</a>
   </div>
@@ -26,15 +27,15 @@
 </div>
 
 <div class="stats document-stats">
+  <div class="stat"><b>{{ operations_total }}</b><span>операций</span></div>
   <a class="stat" href="{% url 'contract_list' %}?organization={{ organization.pk }}"><b>{{ contracts_total }}</b><span>договоров</span></a>
   <a class="stat" href="{% url 'document_list' %}?organization={{ organization.pk }}"><b>{{ documents_total }}</b><span>документов</span></a>
   <a class="stat" href="{% url 'reminder_list' %}?organization={{ organization.pk }}"><b>{{ reminders_total }}</b><span>напоминаний</span></a>
-  <div class="stat"><b>{{ counterparties_total }}</b><span>контрагентов</span></div>
 </div>
 
 <section class="card">
   <div class="section-head">
-    <div><h2>Договоры</h2><p class="muted">Сразу видно, между какими сторонами заключён каждый договор.</p></div>
+    <div><h2>Договоры</h2><p class="muted">Основной договор — верхний уровень. Допсоглашения и приложения остаются документами договора, операции идут отдельными пакетами.</p></div>
     <a href="{% url 'contract_list' %}?organization={{ organization.pk }}">Все договоры</a>
   </div>
   <div class="party-contract-grid">
@@ -42,65 +43,50 @@
       <a class="party-contract-card" href="{{ item.get_absolute_url }}">
         <div class="party-contract-sides">
           {% if item.organization_id == organization.pk %}
-            <span class="party-side active">{{ organization }}</span>
-            <span class="party-arrow">↔</span>
-            <span class="party-side">{{ item.counterparty }}</span>
+            <span class="party-side active">{{ organization }}</span><span class="party-arrow">↔</span><span class="party-side">{{ item.counterparty }}</span>
           {% else %}
-            <span class="party-side active">{{ organization }}</span>
-            <span class="party-arrow">↔</span>
-            <span class="party-side">{{ item.organization }}</span>
+            <span class="party-side active">{{ organization }}</span><span class="party-arrow">↔</span><span class="party-side">{{ item.organization }}</span>
           {% endif %}
         </div>
-        <div class="party-contract-title">
-          <b>{{ item.title }}</b>
-          <small>{% if item.number %}№{{ item.number }}{% endif %}{% if item.contract_date %} · {{ item.contract_date|date:"d.m.Y" }}{% endif %}</small>
-        </div>
-        <div class="party-contract-meta">
-          <span>{{ item.document_count }} документов</span>
-          <span class="badge">{{ item.status_label }}</span>
-        </div>
+        <div class="party-contract-title"><b>{{ item.title }}</b><small>{% if item.number %}№{{ item.number }}{% endif %}{% if item.contract_date %} · {{ item.contract_date|date:"d.m.Y" }}{% endif %}</small></div>
+        <div class="party-contract-meta"><span>{{ item.operation_count }} операций</span><span>{{ item.document_count }} документов</span><span class="badge">{{ item.status_label }}</span></div>
       </a>
-    {% empty %}
-      <p class="muted">Договоров для этой организации пока нет.</p>
-    {% endfor %}
+    {% empty %}<p class="muted">Договоров для этой организации пока нет.</p>{% endfor %}
+  </div>
+</section>
+
+<section class="card">
+  <div class="section-head">
+    <div><h2>Операции</h2><p class="muted">Одна карточка — один смысловой пакет документов.</p></div>
+    <a class="btn small" href="{% url 'operation_add' %}?organization={{ organization.pk }}">+ Операция</a>
+  </div>
+  <div class="operation-grid">
+    {% for item in operations %}
+      <a class="operation-card" href="{{ item.get_absolute_url }}">
+        <div class="operation-card-date">{{ item.operation_date|date:"d.m.Y"|default:"Без даты" }}</div>
+        <div class="operation-card-main">
+          <b>{{ item.title }}</b>
+          <small>{% if item.contract %}{{ item.contract }}{% elif item.counterparty %}{{ item.counterparty }} · без договора{% else %}Без договора{% endif %}</small>
+        </div>
+        <div class="operation-card-count"><b>{{ item.document_count }}</b><span>док.</span></div>
+      </a>
+    {% empty %}<p class="muted">Операций пока нет.</p>{% endfor %}
   </div>
 </section>
 
 <div class="grid two">
   <section class="card">
-    <div class="section-head"><div><h2>Последние документы</h2><p class="muted">Включая документы, где организация указана второй стороной договора.</p></div><a href="{% url 'document_list' %}?organization={{ organization.pk }}">Все</a></div>
-    {% for item in recent_documents %}
-      <a class="row-link" href="{{ item.get_absolute_url }}">
-        <span>
-          <b>{{ item.display_title }}</b>
-          <small>{{ item.document_date|date:"d.m.Y"|default:"Без даты" }}{% if item.counterparty %} · {{ item.counterparty }}{% endif %}</small>
-        </span>
-        <small>{{ item.document_type|default:"Документ" }}</small>
-      </a>
-    {% empty %}<p class="muted">Документов пока нет.</p>{% endfor %}
+    <div class="section-head"><div><h2>Документы вне операций</h2><p class="muted">Договоры, допсоглашения, приложения и файлы, которые ещё не объединены в пакет.</p></div><a href="{% url 'document_list' %}?organization={{ organization.pk }}">Все документы</a></div>
+    {% for item in ungrouped_documents %}
+      <a class="row-link" href="{{ item.get_absolute_url }}"><span><b>{{ item.display_title }}</b><small>{{ item.document_type|default:"Документ" }}{% if item.contract %} · {{ item.contract }}{% endif %}</small></span><small>{{ item.document_date|date:"d.m.Y"|default:"—" }}</small></a>
+    {% empty %}<p class="muted">Все операционные документы сгруппированы.</p>{% endfor %}
   </section>
 
   <section class="card">
-    <div class="section-head"><div><h2>Без договора</h2><p class="muted">Документы организации, которые не связаны с карточкой договора.</p></div></div>
-    {% for item in unlinked_documents %}
-      <a class="row-link" href="{{ item.get_absolute_url }}">
-        <span><b>{{ item.display_title }}</b><small>{{ item.counterparty|default:"Без контрагента" }}</small></span>
-        <small>{{ item.document_date|date:"d.m.Y"|default:"—" }}</small>
-      </a>
-    {% empty %}<p class="muted">Отдельных документов нет.</p>{% endfor %}
+    <div class="section-head"><div><h2>Без договора</h2><p class="muted">Операции и документы, которые не требуют карточки договора.</p></div></div>
+    {% for item in no_contract_operations %}
+      <a class="row-link" href="{{ item.get_absolute_url }}"><span><b>{{ item.title }}</b><small>{{ item.counterparty|default:"Без контрагента" }}</small></span><small>{{ item.document_count }} док.</small></a>
+    {% empty %}<p class="muted">Операций без договора нет.</p>{% endfor %}
   </section>
 </div>
-
-{% if reminder_rows %}
-<section class="card">
-  <div class="section-head"><div><h2>Ближайшее</h2><p class="muted">Только созданные вручную напоминания.</p></div><a href="{% url 'reminder_add' %}?organization={{ organization.pk }}">+ Напоминание</a></div>
-  {% for row in reminder_rows %}
-    <div class="reminder-row {{ row.state }}">
-      <div class="reminder-date"><b>{{ row.due|date:"d" }}</b><span>{{ row.due|date:"M" }}</span></div>
-      <div class="reminder-main"><b>{{ row.reminder.title }}</b><small>{% if row.reminder.counterparty %}{{ row.reminder.counterparty }}{% endif %}{% if row.reminder.contract %} · {{ row.reminder.contract }}{% endif %}</small></div>
-      <a class="text-button" href="{% url 'reminder_edit' row.reminder.pk %}">Изменить</a>
-    </div>
-  {% endfor %}
-</section>
-{% endif %}
 {% endblock %}

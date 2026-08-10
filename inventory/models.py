@@ -574,6 +574,54 @@ class DocumentType(TimeStampedModel):
         return self.name
 
 
+
+class DocumentOperation(TimeStampedModel):
+    organization = models.ForeignKey(
+        Organization, verbose_name="Организация", on_delete=models.PROTECT, related_name="document_operations"
+    )
+    counterparty = models.ForeignKey(
+        Counterparty, verbose_name="Контрагент", on_delete=models.SET_NULL, null=True, blank=True, related_name="document_operations"
+    )
+    contract = models.ForeignKey(
+        Contract, verbose_name="Договор", on_delete=models.SET_NULL, null=True, blank=True, related_name="operations"
+    )
+    location = models.ForeignKey(
+        Location, verbose_name="Объект", on_delete=models.SET_NULL, null=True, blank=True, related_name="document_operations"
+    )
+    title = models.CharField("Название операции", max_length=255)
+    operation_date = models.DateField("Дата операции", null=True, blank=True, db_index=True)
+    amount = models.DecimalField("Сумма", max_digits=15, decimal_places=2, null=True, blank=True)
+    notes = models.TextField("Комментарий", blank=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, verbose_name="Создал", on_delete=models.SET_NULL,
+        null=True, blank=True, related_name="created_document_operations",
+    )
+
+    class Meta:
+        ordering = ["-operation_date", "-created_at", "-pk"]
+        verbose_name = "операция документов"
+        verbose_name_plural = "операции документов"
+        indexes = [
+            models.Index(fields=["organization", "operation_date"], name="inv_op_org_date_idx"),
+            models.Index(fields=["contract", "operation_date"], name="inv_op_contract_date_idx"),
+        ]
+
+    def __str__(self):
+        return self.title
+
+    def get_absolute_url(self):
+        return reverse("operation_detail", args=[self.pk])
+
+    def save(self, *args, **kwargs):
+        if self.contract_id:
+            self.organization_id = self.contract.organization_id
+            if not self.counterparty_id:
+                self.counterparty_id = self.contract.counterparty_id
+            if not self.location_id and self.contract.location_id:
+                self.location_id = self.contract.location_id
+        super().save(*args, **kwargs)
+
+
 class DocumentRecord(TimeStampedModel):
     organization = models.ForeignKey(
         Organization, verbose_name="Организация", on_delete=models.PROTECT, related_name="document_records"
@@ -586,6 +634,9 @@ class DocumentRecord(TimeStampedModel):
     )
     contract = models.ForeignKey(
         Contract, verbose_name="Договор", on_delete=models.SET_NULL, null=True, blank=True, related_name="documents"
+    )
+    operation = models.ForeignKey(
+        DocumentOperation, verbose_name="Операция", on_delete=models.SET_NULL, null=True, blank=True, related_name="documents"
     )
     location = models.ForeignKey(
         Location, verbose_name="Объект", on_delete=models.SET_NULL, null=True, blank=True, related_name="document_records"
@@ -632,6 +683,13 @@ class DocumentRecord(TimeStampedModel):
         return self.document_type_id is None
 
     def save(self, *args, **kwargs):
+        if self.operation_id:
+            self.organization_id = self.operation.organization_id
+            self.contract_id = self.operation.contract_id
+            if not self.counterparty_id:
+                self.counterparty_id = self.operation.counterparty_id
+            if not self.location_id:
+                self.location_id = self.operation.location_id
         if self.file and not self.original_name:
             self.original_name = self.file.name.rsplit("/", 1)[-1]
         if self.contract_id:
