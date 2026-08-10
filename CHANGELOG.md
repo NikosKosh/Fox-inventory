@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.4.0 — 2026-08-10
+
+- Replaced the flat everyday “Documents” concept with a grouped “Registry”: one package is one logical record, while the technical “All files” mode remains available.
+- Registry counters now distinguish logical records from physical files; grouping a set of files into a package reduces the logical record count without pretending files disappeared.
+- Packaged files can no longer be selected for “assemble into package” again.
+- Added package lifecycle controls: remove a file from a package, move it between compatible packages, and disband a package without deleting its files.
+- Added safe unlinking of unused external parties from an organization. Links with business data and links between internal organizations are protected.
+- Quick package upload no longer invents each document date from the package date.
+- Filename-based type recognition is now explicitly marked as an assumption and routed to “Needs attention” for confirmation.
+- Split “Needs attention” from “outside package”: a file can be correctly grouped but still need type confirmation.
+- Added SHA-256 duplicate detection for new uploads and package quick uploads.
+- Multi-file upload no longer silently copies one document date/number/amount/title to every selected file; per-document requisites are allowed only for a single file.
+- Added document file version retention when a file is replaced.
+- Added document/package activity history for upload, edit, grouping, moving, removing, trashing, restoring and disbanding.
+- Organization filters in the registry, document dashboard and contract list now use the same symmetric relationship logic as the organization workspace.
+- Internal organization counterparty pages now count both sides of internal relationships instead of only the physical counterparty FK.
+- Reworked document navigation to “Workspace / Registry / Needs attention / Reminders”; flat dictionaries moved under “Directories”.
+- Document edit, trash and restore flows preserve the user’s relationship/package context.
+- Trash, attention queue and counterparty file lists are paginated instead of silently cutting off at fixed limits.
+- Contract main files now remember the original uploaded filename and use it in the viewer/download flow.
+- Added consistency/safety regression tests for grouped registry counts, package lifecycle, duplicate protection, upload metadata safety, symmetric filters, party unlinking and file versioning.
+
 ## 1.3.0 — 2026-08-10
 
 - Reworked the document area around a complete user journey instead of separate database entities.

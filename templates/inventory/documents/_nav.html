@@ -1,8 +1,16 @@
-<nav class="document-tabs" aria-label="Документы">
-  <a class="{% if request.resolver_match.url_name == 'document_center' %}active{% endif %}" href="{% url 'document_center' %}">Обзор</a>
-  <a class="{% if request.resolver_match.url_name == 'document_list' or request.resolver_match.url_name == 'document_detail' or request.resolver_match.url_name == 'document_edit' or request.resolver_match.url_name == 'document_upload' %}active{% endif %}" href="{% url 'document_list' %}">Документы</a>
-  <a class="{% if request.resolver_match.url_name == 'contract_list' or request.resolver_match.url_name == 'contract_detail' or request.resolver_match.url_name == 'contract_edit' or request.resolver_match.url_name == 'contract_add' %}active{% endif %}" href="{% url 'contract_list' %}">Договоры</a>
-  <a class="{% if request.resolver_match.url_name == 'counterparty_list' or request.resolver_match.url_name == 'counterparty_detail' %}active{% endif %}" href="{% url 'counterparty_list' %}">Контрагенты</a>
+<nav class="document-tabs" aria-label="Документооборот">
+  <a class="{% if request.resolver_match.url_name == 'document_center' or request.resolver_match.url_name == 'organization_document_workspace' %}active{% endif %}" href="{% url 'document_center' %}">Рабочий стол</a>
+  <a class="{% if request.resolver_match.url_name == 'document_list' or request.resolver_match.url_name == 'document_detail' or request.resolver_match.url_name == 'document_edit' %}active{% endif %}" href="{% url 'document_list' %}">Реестр</a>
+  <a class="{% if request.resolver_match.url_name == 'document_inbox' %}active{% endif %}" href="{% url 'document_inbox' %}">Требует внимания</a>
   <a class="{% if request.resolver_match.url_name == 'reminder_list' or request.resolver_match.url_name == 'reminder_add' or request.resolver_match.url_name == 'reminder_edit' %}active{% endif %}" href="{% url 'reminder_list' %}">Напоминания</a>
-  <a class="{% if request.resolver_match.url_name == 'document_inbox' %}active{% endif %}" href="{% url 'document_inbox' %}">Неразобранные</a>
+
+  <details class="document-nav-more">
+    <summary>Справочники</summary>
+    <div>
+      <a href="{% url 'contract_list' %}">Договоры</a>
+      <a href="{% url 'counterparty_list' %}">Стороны</a>
+      <a href="{% url 'document_type_list' %}">Типы документов</a>
+      <a href="{% url 'document_trash_list' %}">Корзина</a>
+    </div>
+  </details>
 </nav>

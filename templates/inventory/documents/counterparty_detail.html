@@ -1,30 +1,19 @@
 {% extends "base.html" %}
 {% block title %}{{ object }} — FOX Inventory{% endblock %}
 {% block content %}
-<a class="back-link" href="{% url 'counterparty_list' %}">← Контрагенты</a>
+<a class="back-link" href="{% url 'counterparty_list' %}">← Стороны</a>
 <div class="page-head">
-  <div>
-    <span class="eyebrow">{% if object.linked_organization %}Внутренняя сторона{% else %}Контрагент{% endif %}</span>
-    <h1>{{ object }}</h1>
-    <p class="muted">{{ object.name }}</p>
-  </div>
-  <div class="actions">
-    {% if object.linked_organization %}<a class="btn" href="{% url 'organization_document_workspace' object.linked_organization.pk %}">Открыть документы организации</a>{% endif %}
-    <a class="btn primary" href="{% url 'counterparty_edit' object.pk %}">Изменить</a>
-  </div>
+  <div><span class="eyebrow">{% if object.linked_organization %}Наша организация{% else %}Вторая сторона{% endif %}</span><h1>{{ object }}</h1><p class="muted">{% if object.inn %}ИНН {{ object.inn }}{% endif %}{% if object.kpp %} · КПП {{ object.kpp }}{% endif %}</p></div>
+  <div class="actions"><a class="btn primary" href="{% url 'counterparty_edit' object.pk %}">Изменить</a></div>
 </div>
 {% include "inventory/documents/_nav.html" %}
-
-{% if object.linked_organization %}
-<section class="card internal-party-note">
-  <div><span class="internal-party-badge">Наша организация</span><b>{{ object.linked_organization }}</b><p class="muted">Эта карточка нужна, чтобы внутренняя организация могла выступать второй стороной договора. Документы при этом не дублируются.</p></div>
-  <a class="btn small" href="{% url 'organization_document_workspace' object.linked_organization.pk %}">Смотреть от её лица →</a>
-</section>
-{% endif %}
-
 <div class="grid two">
-  <section class="card"><h2>Реквизиты</h2><dl class="details"><dt>ИНН</dt><dd>{{ object.inn|default:"—" }}</dd><dt>КПП</dt><dd>{{ object.kpp|default:"—" }}</dd><dt>Контакт</dt><dd>{{ object.contact_name|default:"—" }}</dd><dt>Телефон</dt><dd>{{ object.phone|default:"—" }}</dd><dt>Email</dt><dd>{{ object.email|default:"—" }}</dd><dt>Комментарий</dt><dd>{{ object.notes|default:"—"|linebreaksbr }}</dd></dl></section>
-  <section class="card"><div class="section-head"><h2>Договоры</h2><a href="{% url 'contract_add' %}?counterparty={{ object.pk }}">+ Добавить</a></div>{% for item in contracts %}<a class="row-link" href="{{ item.get_absolute_url }}"><span><b>{{ item }}</b><small>{{ item.organization }}</small></span><small>{{ item.status_label }}</small></a>{% empty %}<p class="muted">Нет договоров.</p>{% endfor %}</section>
+  <section class="card"><h2>Реквизиты</h2><dl class="details"><dt>Полное имя</dt><dd>{{ object.name }}</dd><dt>Краткое имя</dt><dd>{{ object.short_name|default:"—" }}</dd><dt>ИНН</dt><dd>{{ object.inn|default:"—" }}</dd><dt>КПП</dt><dd>{{ object.kpp|default:"—" }}</dd><dt>Контакт</dt><dd>{{ object.contact_name|default:"—" }}</dd><dt>Телефон</dt><dd>{{ object.phone|default:"—" }}</dd><dt>Email</dt><dd>{{ object.email|default:"—" }}</dd></dl></section>
+  <section class="card"><h2>Договоры</h2>{% for item in contracts %}<a class="row-link" href="{{ item.get_absolute_url }}"><span><b>{{ item }}</b><small>{{ item.organization }} ↔ {{ item.counterparty }}</small></span><small>{{ item.status_label }}</small></a>{% empty %}<p class="muted">Договоров нет.</p>{% endfor %}</section>
 </div>
-<section class="card"><div class="section-head"><h2>Последние документы</h2><a href="{% url 'document_upload' %}?counterparty={{ object.pk }}">+ Загрузить</a></div>{% for item in documents %}<a class="row-link" href="{{ item.get_absolute_url }}"><span><b>{{ item.display_title }}</b><small>{{ item.organization }} · {{ item.document_date|date:"d.m.Y"|default:"без даты" }}</small></span><small>{{ item.document_type|default:"Неразобранное" }}</small></a>{% empty %}<p class="muted">Документов нет.</p>{% endfor %}</section>
+<section class="card">
+  <div class="section-head"><div><h2>Файлы</h2><p class="muted">Для внутренней организации учитываются обе стороны отношений.</p></div></div>
+  {% for item in documents %}<a class="row-link" href="{{ item.get_absolute_url }}"><span><b>{{ item.display_title }}</b><small>{{ item.organization }}{% if item.counterparty %} ↔ {{ item.counterparty }}{% endif %}{% if item.operation %} · {{ item.operation }}{% endif %}</small></span><small>{{ item.document_date|date:"d.m.Y"|default:"—" }}</small></a>{% empty %}<p class="muted">Файлов нет.</p>{% endfor %}
+</section>
+{% if page_obj.has_other_pages %}<nav class="pagination">{% if page_obj.has_previous %}<a href="?page={{ page_obj.previous_page_number }}">←</a>{% endif %}<span>{{ page_obj.number }} / {{ page_obj.paginator.num_pages }}</span>{% if page_obj.has_next %}<a href="?page={{ page_obj.next_page_number }}">→</a>{% endif %}</nav>{% endif %}
 {% endblock %}

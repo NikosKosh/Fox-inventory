@@ -1,3 +1,20 @@
 {% extends "base.html" %}
-{% block title %}Корзина документов — FOX Inventory{% endblock %}
-{% block content %}<div class="page-head"><div><h1>Корзина документов</h1><p class="muted">Удалённые документы остаются здесь до окончательного удаления.</p></div><a class="btn" href="{% url 'document_list' %}">К документам</a></div>{% include "inventory/documents/_nav.html" %}<section class="card"><div class="table-wrap"><table><thead><tr><th>Удалён</th><th>Документ</th><th>Организация</th><th></th></tr></thead><tbody>{% for item in objects %}<tr><td>{{ item.trashed_at|date:"d.m.Y H:i" }}</td><td>{{ item.display_title }}<small>{{ item.original_name }}</small></td><td>{{ item.organization }}</td><td><div class="actions"><form method="post" action="{% url 'document_restore' item.pk %}">{% csrf_token %}<button class="text-button" type="submit">Восстановить</button></form>{% if user.is_staff %}<form method="post" action="{% url 'document_delete_permanently' item.pk %}" onsubmit="return confirm('Удалить документ и файл окончательно?')">{% csrf_token %}<button class="text-button danger-text" type="submit">Удалить окончательно</button></form>{% endif %}</div></td></tr>{% empty %}<tr><td colspan="4">Корзина пуста.</td></tr>{% endfor %}</tbody></table></div></section>{% endblock %}
+{% block title %}Корзина — FOX Inventory{% endblock %}
+{% block content %}
+<div class="page-head"><div><span class="eyebrow">Документооборот</span><h1>Корзина</h1><p class="muted">Удалённые файлы хранятся здесь до окончательного удаления администратором.</p></div></div>
+{% include "inventory/documents/_nav.html" %}
+<section class="card">
+  {% for item in objects %}
+    <div class="trash-row">
+      <span><b>{{ item.display_title }}</b><small>{{ item.organization }}{% if item.counterparty %} ↔ {{ item.counterparty }}{% endif %} · удалён {{ item.trashed_at|date:"d.m.Y H:i" }}</small></span>
+      <div class="actions">
+        <form method="post" action="{% url 'document_restore' item.pk %}">{% csrf_token %}<input type="hidden" name="next" value="{% url 'document_trash_list' %}"><button class="btn small" type="submit">Восстановить</button></form>
+        {% if request.user.is_staff %}
+        <form method="post" action="{% url 'document_delete_permanently' item.pk %}" onsubmit="return confirm('Удалить файл окончательно? Это действие необратимо.');">{% csrf_token %}<button class="btn small danger" type="submit">Удалить навсегда</button></form>
+        {% endif %}
+      </div>
+    </div>
+  {% empty %}<p class="muted">Корзина пуста.</p>{% endfor %}
+</section>
+{% if page_obj.has_other_pages %}<nav class="pagination">{% if page_obj.has_previous %}<a href="?page={{ page_obj.previous_page_number }}">←</a>{% endif %}<span>{{ page_obj.number }} / {{ page_obj.paginator.num_pages }}</span>{% if page_obj.has_next %}<a href="?page={{ page_obj.next_page_number }}">→</a>{% endif %}</nav>{% endif %}
+{% endblock %}

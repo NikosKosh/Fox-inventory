@@ -573,6 +573,9 @@ class Contract(TimeStampedModel):
     main_file = models.FileField(
         "Файл договора", upload_to=contract_file_upload_to, blank=True, validators=[validate_business_document]
     )
+    main_file_original_name = models.CharField(
+        "Исходное имя файла договора", max_length=255, blank=True
+    )
     notes = models.TextField("Комментарий", blank=True)
     archived = models.BooleanField("В архиве", default=False, db_index=True)
     created_by = models.ForeignKey(
@@ -594,6 +597,11 @@ class Contract(TimeStampedModel):
         if self.number.casefold() in self.title.casefold():
             return self.title
         return f"{self.title} №{self.number}"
+
+    def save(self, *args, **kwargs):
+        if self.main_file and not self.main_file_original_name:
+            self.main_file_original_name = self.main_file.name.rsplit("/", 1)[-1]
+        super().save(*args, **kwargs)
 
     def get_absolute_url(self):
         return reverse("contract_detail", args=[self.pk])
@@ -673,7 +681,125 @@ class DocumentOperation(TimeStampedModel):
         super().save(*args, **kwargs)
 
 
+
+class DocumentFileVersion(models.Model):
+    document = models.ForeignKey(
+        "DocumentRecord",
+        verbose_name="Документ",
+        on_delete=models.CASCADE,
+        related_name="file_versions",
+    )
+    file = models.FileField(
+        "Файл версии",
+        upload_to="documents/versions/%Y/%m/",
+    )
+    original_name = models.CharField(
+        "Исходное имя",
+        max_length=255,
+        blank=True,
+    )
+    file_sha256 = models.CharField(
+        "SHA-256",
+        max_length=64,
+        blank=True,
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        verbose_name="Сохранил версию",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="created_document_versions",
+    )
+
+    class Meta:
+        ordering = ["-created_at", "-pk"]
+        verbose_name = "версия файла документа"
+        verbose_name_plural = "версии файлов документов"
+
+    def __str__(self):
+        return self.original_name or f"Версия {self.pk}"
+
+
+class DocumentActivity(models.Model):
+    action = models.CharField("Действие", max_length=40)
+    message = models.CharField("Описание", max_length=500, blank=True)
+    actor = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        verbose_name="Пользователь",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="document_activity",
+    )
+    organization = models.ForeignKey(
+        Organization,
+        verbose_name="Организация",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="document_activity",
+    )
+    counterparty = models.ForeignKey(
+        Counterparty,
+        verbose_name="Вторая сторона",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="document_activity",
+    )
+    contract = models.ForeignKey(
+        Contract,
+        verbose_name="Договор",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="document_activity",
+    )
+    operation = models.ForeignKey(
+        DocumentOperation,
+        verbose_name="Пакет",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="activity",
+    )
+    document = models.ForeignKey(
+        "DocumentRecord",
+        verbose_name="Документ",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="activity",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at", "-pk"]
+        verbose_name = "событие документооборота"
+        verbose_name_plural = "события документооборота"
+        indexes = [
+            models.Index(
+                fields=["document", "created_at"],
+                name="inv_activity_doc_time_idx",
+            ),
+            models.Index(
+                fields=["operation", "created_at"],
+                name="inv_activity_op_time_idx",
+            ),
+        ]
+
+    def __str__(self):
+        return self.message or self.action
+
+
 class DocumentRecord(TimeStampedModel):
+    class ClassificationSource(models.TextChoices):
+        MANUAL = "manual", "Указано вручную"
+        FILENAME = "filename", "Определено по имени файла"
+        UNKNOWN = "", "Не определено"
+
     organization = models.ForeignKey(
         Organization, verbose_name="Организация", on_delete=models.PROTECT, related_name="document_records"
     )
@@ -701,6 +827,11 @@ class DocumentRecord(TimeStampedModel):
     amount = models.DecimalField("Сумма", max_digits=15, decimal_places=2, null=True, blank=True)
     file = models.FileField("Файл", upload_to=document_file_upload_to, validators=[validate_business_document])
     original_name = models.CharField("Исходное имя файла", max_length=255, blank=True)
+    classification_source = models.CharField(
+        "Источник типа", max_length=20, choices=ClassificationSource.choices,
+        default=ClassificationSource.MANUAL,
+    )
+    file_sha256 = models.CharField("SHA-256 файла", max_length=64, blank=True, db_index=True)
     notes = models.TextField("Комментарий", blank=True)
     trashed_at = models.DateTimeField("В корзине с", null=True, blank=True, db_index=True)
     created_by = models.ForeignKey(

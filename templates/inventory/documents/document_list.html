@@ -1,35 +1,135 @@
 {% extends "base.html" %}
-{% block title %}Все документы — FOX Inventory{% endblock %}
+{% block title %}Реестр — FOX Inventory{% endblock %}
 {% block content %}
-<div class="page-head"><div><h1>Все документы</h1><p class="muted">Технический реестр файлов. Основная работа ведётся через организацию → договор → операцию.</p></div><div class="actions"><a class="btn" href="{% url 'document_type_list' %}">Типы</a><a class="btn" href="{% url 'document_trash_list' %}">Корзина</a><a class="btn" href="{% url 'document_inbox' %}">Неразобранные</a><a class="btn primary" href="{% url 'document_upload' %}">+ Загрузить</a></div></div>
+<div class="page-head">
+  <div>
+    <span class="eyebrow">Документооборот</span>
+    <h1>Реестр</h1>
+    <p class="muted">По умолчанию пакет отображается как одна сущность. Режим «Все файлы» нужен для технического поиска.</p>
+  </div>
+  <div class="actions">
+    <a class="btn" href="{% url 'document_type_list' %}">Типы</a>
+    <a class="btn" href="{% url 'document_trash_list' %}">Корзина</a>
+    <a class="btn primary" href="{% url 'document_upload' %}">+ Загрузить</a>
+  </div>
+</div>
+
 {% include "inventory/documents/_nav.html" %}
+
+<div class="registry-mode-switch">
+  <a class="{% if mode == 'grouped' %}active{% endif %}" href="?mode=grouped{% if q %}&q={{ q|urlencode }}{% endif %}{% if selected_organization %}&organization={{ selected_organization }}{% endif %}{% if selected_type %}&type={{ selected_type }}{% endif %}{% if selected_counterparty %}&counterparty={{ selected_counterparty }}{% endif %}{% if selected_contract %}&contract={{ selected_contract }}{% endif %}{% if selected_year %}&year={{ selected_year }}{% endif %}{% if only_unpacked %}&unpacked=1{% endif %}">Сгруппировано</a>
+  <a class="{% if mode == 'files' %}active{% endif %}" href="?mode=files{% if q %}&q={{ q|urlencode }}{% endif %}{% if selected_organization %}&organization={{ selected_organization }}{% endif %}{% if selected_type %}&type={{ selected_type }}{% endif %}{% if selected_counterparty %}&counterparty={{ selected_counterparty }}{% endif %}{% if selected_contract %}&contract={{ selected_contract }}{% endif %}{% if selected_year %}&year={{ selected_year }}{% endif %}{% if only_unpacked %}&unpacked=1{% endif %}">Все файлы</a>
+  <span class="registry-counts"><b>{{ logical_total }}</b> записей · <b>{{ matching_files_total }}</b> файлов</span>
+</div>
+
 <form class="filters auto-filter document-filters" method="get">
-  <input class="input grow" type="search" name="q" value="{{ q }}" placeholder="Название, номер, файл, контрагент, договор или операция">
-  <select class="input" name="organization"><option value="">Все организации</option>{% for org in organizations %}<option value="{{ org.pk }}" {% if selected_organization == org.pk|stringformat:'s' %}selected{% endif %}>{{ org }}</option>{% endfor %}</select>
-  <select class="input" name="type"><option value="">Все типы</option><option value="inbox" {% if selected_type == 'inbox' %}selected{% endif %}>Неразобранные</option>{% for type in document_types %}<option value="{{ type.pk }}" {% if selected_type == type.pk|stringformat:'s' %}selected{% endif %}>{{ type.name }}</option>{% endfor %}</select>
-  <select class="input" name="counterparty"><option value="">Все контрагенты</option>{% for cp in counterparties %}<option value="{{ cp.pk }}" {% if selected_counterparty == cp.pk|stringformat:'s' %}selected{% endif %}>{{ cp }}</option>{% endfor %}</select>
-  <select class="input" name="contract"><option value="">Все договоры</option>{% for c in contracts %}<option value="{{ c.pk }}" {% if selected_contract == c.pk|stringformat:'s' %}selected{% endif %}>{{ c.organization }} · {{ c.title }}</option>{% endfor %}</select>
-  <select class="input" name="year"><option value="">Все годы</option>{% for d in years %}<option value="{{ d|date:'Y' }}" {% if selected_year == d|date:'Y' %}selected{% endif %}>{{ d|date:'Y' }}</option>{% endfor %}</select>
-  {% if q or selected_organization or selected_type or selected_counterparty or selected_contract or selected_year %}<a class="btn" href="{% url 'document_list' %}">Сбросить</a>{% endif %}
+  <input type="hidden" name="mode" value="{{ mode }}">
+  <input class="input grow" type="search" name="q" value="{{ q }}" placeholder="Название, номер, файл, ИНН, договор или пакет">
+  <select class="input" name="organization">
+    <option value="">Все организации</option>
+    {% for org in organizations %}<option value="{{ org.pk }}" {% if selected_organization == org.pk|stringformat:'s' %}selected{% endif %}>{{ org }}</option>{% endfor %}
+  </select>
+  <select class="input" name="type">
+    <option value="">Все типы</option>
+    <option value="attention" {% if selected_type == 'attention' %}selected{% endif %}>Требует внимания</option>
+    {% for type in document_types %}<option value="{{ type.pk }}" {% if selected_type == type.pk|stringformat:'s' %}selected{% endif %}>{{ type.name }}</option>{% endfor %}
+  </select>
+  <select class="input" name="counterparty">
+    <option value="">Все стороны</option>
+    {% for cp in counterparties %}<option value="{{ cp.pk }}" {% if selected_counterparty == cp.pk|stringformat:'s' %}selected{% endif %}>{{ cp }}</option>{% endfor %}
+  </select>
+  <select class="input" name="contract">
+    <option value="">Все договоры</option>
+    {% for c in contracts %}<option value="{{ c.pk }}" {% if selected_contract == c.pk|stringformat:'s' %}selected{% endif %}>{{ c.organization }} · {{ c }}</option>{% endfor %}
+  </select>
+  <select class="input" name="year">
+    <option value="">Все годы</option>
+    {% for d in years %}<option value="{{ d|date:'Y' }}" {% if selected_year == d|date:'Y' %}selected{% endif %}>{{ d|date:'Y' }}</option>{% endfor %}
+  </select>
+  <label class="registry-unpacked-toggle"><input type="checkbox" name="unpacked" value="1" {% if only_unpacked %}checked{% endif %}> Только вне пакетов</label>
+  {% if q or selected_organization or selected_type or selected_counterparty or selected_contract or selected_year or only_unpacked %}<a class="btn" href="{% url 'document_list' %}?mode={{ mode }}">Сбросить</a>{% endif %}
 </form>
 
+{% if mode == "grouped" %}
 <form method="post" action="{% url 'operation_from_documents' %}">
-{% csrf_token %}
-<div class="bulk-operation-bar"><span>Выберите связанные файлы</span><button class="btn small" type="submit">Собрать в операцию</button></div>
-<section class="card compact-table-card"><div class="table-wrap"><table class="dense-table"><thead><tr><th class="select-col"></th><th>Дата</th><th>Тип</th><th>Документ</th><th>Организация</th><th>Контрагент</th><th>Договор / операция</th><th class="numeric-col">Сумма</th></tr></thead><tbody>
-{% for item in objects %}
-<tr>
-  <td class="select-col"><input type="checkbox" name="selected_documents" value="{{ item.pk }}"></td>
-  <td>{{ item.document_date|date:"d.m.Y"|default:"—" }}</td>
-  <td>{% if item.document_type %}<span class="doc-type-badge">{{ item.document_type }}</span>{% else %}<span class="doc-type-badge inbox">Неразобранное</span>{% endif %}</td>
-  <td><a href="{{ item.get_absolute_url }}"><b>{{ item.display_title }}</b></a><small>{{ item.original_name }}</small></td>
-  <td><span class="org-chip">{{ item.organization }}</span></td>
-  <td>{{ item.counterparty|default:"—" }}</td>
-  <td>{% if item.operation %}<a href="{{ item.operation.get_absolute_url }}"><b>{{ item.operation.title }}</b></a>{% elif item.contract %}<a href="{{ item.contract.get_absolute_url }}">{{ item.contract.title }}</a><small>вне операции</small>{% else %}—{% endif %}</td>
-  <td class="numeric-col">{% if item.amount %}{{ item.amount }} ₽{% else %}—{% endif %}</td>
-</tr>
-{% empty %}<tr><td colspan="8">Документы не найдены.</td></tr>{% endfor %}
-</tbody></table></div></section>
+  {% csrf_token %}
+  <div class="bulk-operation-bar">
+    <span>Галочки есть только у файлов вне пакетов.</span>
+    <button class="btn small" type="submit">Собрать выбранные в пакет</button>
+  </div>
+
+  <div class="registry-grouped-list">
+    {% for row in grouped_rows %}
+      {% if row.kind == "package" %}
+        <article class="registry-package-card">
+          <a class="registry-package-main" href="{{ row.operation.get_absolute_url }}">
+            <span class="registry-package-icon">П</span>
+            <span class="registry-package-copy">
+              <span class="registry-package-title">{{ row.operation.title }}</span>
+              <small>
+                {{ row.operation.organization }}
+                {% if row.operation.counterparty %} ↔ {{ row.operation.counterparty }}{% endif %}
+                {% if row.operation.contract %} · {{ row.operation.contract }}{% else %} · без договора{% endif %}
+              </small>
+              <span class="operation-doc-chips">
+                {% for doc in row.documents|slice:":6" %}
+                  <span>{{ doc.document_type|default:"Тип не определён" }}{% if doc.number %} №{{ doc.number }}{% endif %}</span>
+                {% endfor %}
+                {% if row.operation.active_document_count > 6 %}<span>+{{ row.operation.active_document_count|add:"-6" }}</span>{% endif %}
+              </span>
+            </span>
+            <span class="registry-package-meta"><b>{{ row.operation.active_document_count }}</b><small>файлов</small><span>{{ row.operation.operation_date|date:"d.m.Y"|default:"без даты" }}</span></span>
+          </a>
+        </article>
+      {% else %}
+        <article class="registry-standalone-card">
+          <input type="checkbox" name="selected_documents" value="{{ row.document.pk }}" aria-label="Выбрать {{ row.document.display_title }}">
+          <a href="{{ row.document.get_absolute_url }}" class="registry-standalone-main">
+            <span class="relationship-doc-icon">{{ row.document.document_type.name|slice:":1"|default:"?" }}</span>
+            <span>
+              <b>{{ row.document.display_title }}</b>
+              <small>
+                {{ row.document.organization }}
+                {% if row.document.counterparty %} ↔ {{ row.document.counterparty }}{% endif %}
+                {% if row.document.contract %} · {{ row.document.contract }} · вне пакета{% else %} · отдельный файл{% endif %}
+              </small>
+            </span>
+            <span>{{ row.document.document_date|date:"d.m.Y"|default:"без даты" }}</span>
+          </a>
+        </article>
+      {% endif %}
+    {% empty %}
+      <section class="card"><p class="muted">По выбранным условиям ничего не найдено.</p></section>
+    {% endfor %}
+  </div>
 </form>
-{% if page_obj.has_other_pages %}<nav class="pagination">{% if page_obj.has_previous %}<a href="?{% if query_string %}{{ query_string }}&{% endif %}page={{ page_obj.previous_page_number }}">←</a>{% endif %}<span>{{ page_obj.number }} / {{ page_obj.paginator.num_pages }}</span>{% if page_obj.has_next %}<a href="?{% if query_string %}{{ query_string }}&{% endif %}page={{ page_obj.next_page_number }}">→</a>{% endif %}</nav>{% endif %}
+{% else %}
+<section class="card compact-table-card">
+  <div class="table-wrap">
+    <table class="dense-table">
+      <thead><tr><th>Дата</th><th>Тип</th><th>Файл</th><th>Контекст</th><th>Пакет</th><th class="numeric-col">Сумма</th></tr></thead>
+      <tbody>
+      {% for item in objects %}
+        <tr>
+          <td>{{ item.document_date|date:"d.m.Y"|default:"—" }}</td>
+          <td>{% if item.document_type %}<span class="doc-type-badge">{{ item.document_type }}</span>{% else %}<span class="doc-type-badge inbox">Тип не определён</span>{% endif %}</td>
+          <td><a href="{{ item.get_absolute_url }}"><b>{{ item.display_title }}</b></a><small>{{ item.original_name }}</small></td>
+          <td>{{ item.organization }}{% if item.counterparty %} ↔ {{ item.counterparty }}{% endif %}{% if item.contract %}<small>{{ item.contract }}</small>{% endif %}</td>
+          <td>{% if item.operation %}<a href="{{ item.operation.get_absolute_url }}"><b>{{ item.operation.title }}</b></a>{% else %}<span class="badge subtle">Вне пакета</span>{% endif %}</td>
+          <td class="numeric-col">{% if item.amount %}{{ item.amount }} ₽{% else %}—{% endif %}</td>
+        </tr>
+      {% empty %}<tr><td colspan="6">Файлы не найдены.</td></tr>{% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endif %}
+
+{% if page_obj.has_other_pages %}
+<nav class="pagination">
+  {% if page_obj.has_previous %}<a href="?{% if query_string %}{{ query_string }}&{% endif %}page={{ page_obj.previous_page_number }}">←</a>{% endif %}
+  <span>{{ page_obj.number }} / {{ page_obj.paginator.num_pages }}</span>
+  {% if page_obj.has_next %}<a href="?{% if query_string %}{{ query_string }}&{% endif %}page={{ page_obj.next_page_number }}">→</a>{% endif %}
+</nav>
+{% endif %}
 {% endblock %}

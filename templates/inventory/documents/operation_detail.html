@@ -1,11 +1,7 @@
 {% extends "base.html" %}
 {% block title %}{{ object.title }} — FOX Inventory{% endblock %}
 {% block content %}
-{% if object.contract %}
-<a class="back-link" href="{{ object.contract.get_absolute_url }}{% if request.GET.view %}?view={{ request.GET.view }}{% endif %}">← К договору</a>
-{% else %}
-<a class="back-link" href="{{ relationship_back_url }}">← К {{ relationship_back_label }}</a>
-{% endif %}
+<a class="back-link" href="{{ relationship_back_url }}">← {{ relationship_back_label }}</a>
 
 <nav class="document-breadcrumbs">
   <a href="{{ relationship_back_url }}">{{ viewpoint }}</a>
@@ -18,13 +14,10 @@
   <div>
     <span class="eyebrow">Пакет документов</span>
     <h1>{{ object.title }}</h1>
-    <p class="muted">
-      {{ viewpoint }}{% if other_party %} ↔ {{ other_party.name }}{% endif %}
-      {% if object.operation_date %} · {{ object.operation_date|date:"d.m.Y" }}{% endif %}
-    </p>
+    <p class="muted">{{ viewpoint }}{% if other_party %} ↔ {{ other_party.name }}{% endif %}{% if object.operation_date %} · {{ object.operation_date|date:"d.m.Y" }}{% endif %}</p>
   </div>
   <div class="actions">
-    <a class="btn" href="{% url 'document_upload' %}?operation={{ object.pk }}&view={{ viewpoint.pk }}">Расширенная загрузка</a>
+    <a class="btn" href="{% url 'document_upload' %}?operation={{ object.pk }}&view={{ viewpoint.pk }}">+ Файл с реквизитами</a>
     <a class="btn primary" href="{% url 'operation_edit' object.pk %}?view={{ viewpoint.pk }}">Изменить пакет</a>
   </div>
 </div>
@@ -34,26 +27,24 @@
 <div class="operation-workspace-grid">
   <section class="card operation-main-card">
     <div class="operation-main-head">
-      <div>
-        <span class="eyebrow">Событие</span>
-        <h2>{{ object.title }}</h2>
-      </div>
-      <span class="operation-big-count">{{ documents|length }} <small>док.</small></span>
+      <div><span class="eyebrow">Событие</span><h2>{{ object.title }}</h2></div>
+      <span class="operation-big-count">{{ documents|length }} <small>файлов</small></span>
     </div>
     <dl class="details compact-details">
-      <dt>Дата</dt><dd>{{ object.operation_date|date:"d.m.Y"|default:"—" }}</dd>
+      <dt>Дата пакета</dt><dd>{{ object.operation_date|date:"d.m.Y"|default:"—" }}</dd>
       <dt>Договор</dt><dd>{% if object.contract %}<a href="{{ object.contract.get_absolute_url }}?view={{ viewpoint.pk }}">{{ object.contract }}</a>{% else %}Без договора{% endif %}</dd>
-      <dt>Сумма</dt><dd>{% if object.amount %}{{ object.amount }} ₽{% else %}—{% endif %}</dd>
+      <dt>Контрольная сумма</dt><dd>{% if object.amount %}{{ object.amount }} ₽{% else %}—{% endif %}</dd>
       <dt>Объект</dt><dd>{% if object.location %}<a href="{{ object.location.get_absolute_url }}">{{ object.location }}</a>{% else %}—{% endif %}</dd>
       <dt>Комментарий</dt><dd>{{ object.notes|default:"—"|linebreaksbr }}</dd>
     </dl>
+    <p class="muted operation-amount-note">Сумма пакета — контрольное поле. Она не суммируется с суммами счетов/УПД как отдельная финансовая операция.</p>
   </section>
 
   <section class="card quick-upload-card">
     <div>
       <span class="eyebrow">Быстро добавить</span>
-      <h2>Перетащите документы</h2>
-      <p class="muted">Счёт, УПД, акт, накладная или спецификация попадут прямо в этот пакет. Тип попробуем определить по имени файла.</p>
+      <h2>Перетащите комплект</h2>
+      <p class="muted">Дата пакета больше не подставляется как дата каждого файла. Тип по имени — только предположение и попадёт в «Требует внимания».</p>
     </div>
     <form method="post" enctype="multipart/form-data" action="{% url 'operation_quick_upload' object.pk %}?view={{ viewpoint.pk }}" data-operation-drop>
       {% csrf_token %}
@@ -71,72 +62,87 @@
 <section class="card">
   <div class="section-head">
     <div>
-      <h2>Документы пакета</h2>
-      <p class="muted">Нажмите на документ, чтобы открыть предпросмотр. Внутри можно листать файлы стрелками.</p>
+      <h2>Файлы пакета</h2>
+      <p class="muted">Каждый файл можно открыть, убрать из пакета или переместить в совместимый пакет.</p>
     </div>
-    <a class="btn small" href="{% url 'document_upload' %}?operation={{ object.pk }}&view={{ viewpoint.pk }}">+ С реквизитами</a>
   </div>
 
-  <div class="operation-documents operation-documents-v2">
+  <div class="operation-documents operation-documents-v3">
     {% for item in documents %}
-      <a class="operation-document-row" href="{{ item.get_absolute_url }}?view={{ viewpoint.pk }}">
-        <span class="doc-type-badge">{{ item.document_type|default:"Документ" }}</span>
-        <span class="operation-document-main">
-          <b>{{ item.display_title }}</b>
-          <small>{{ item.original_name }}</small>
-        </span>
-        <span>{{ item.document_date|date:"d.m.Y"|default:"—" }}</span>
-        <span class="numeric-col">{% if item.amount %}{{ item.amount }} ₽{% else %}—{% endif %}</span>
-        <span class="document-open-hint">Просмотр →</span>
-      </a>
+      <div class="operation-document-manage-row">
+        <a class="operation-document-row" href="{{ item.get_absolute_url }}?view={{ viewpoint.pk }}">
+          <span class="doc-type-badge {% if not item.document_type %}inbox{% endif %}">{{ item.document_type|default:"Тип не определён" }}</span>
+          <span class="operation-document-main"><b>{{ item.display_title }}</b><small>{{ item.original_name }}</small></span>
+          <span>{{ item.document_date|date:"d.m.Y"|default:"без даты" }}</span>
+          <span class="numeric-col">{% if item.amount %}{{ item.amount }} ₽{% else %}—{% endif %}</span>
+          <span class="document-open-hint">Просмотр →</span>
+        </a>
+
+        <details class="document-row-actions">
+          <summary>⋯</summary>
+          <div>
+            <form method="post" action="{% url 'operation_remove_document' object.pk item.pk %}?view={{ viewpoint.pk }}">
+              {% csrf_token %}
+              <button type="submit">Убрать из пакета</button>
+            </form>
+            {% if compatible_operations %}
+              <form method="post" action="{% url 'operation_move_document' object.pk item.pk %}?view={{ viewpoint.pk }}">
+                {% csrf_token %}
+                <select name="target_operation" class="input">
+                  <option value="">Переместить в…</option>
+                  {% for target in compatible_operations %}<option value="{{ target.pk }}">{{ target }}</option>{% endfor %}
+                </select>
+                <button type="submit">Переместить</button>
+              </form>
+            {% endif %}
+          </div>
+        </details>
+      </div>
     {% empty %}
       <div class="empty-workspace-card small-empty">
-        <h3>Пакет пока пуст</h3>
-        <p>Добавьте счёт, УПД, акт или другие документы через область загрузки выше.</p>
+        <h3>Пакет пуст</h3>
+        <p>Можно добавить файлы или разобрать ошибочно созданный пакет.</p>
       </div>
     {% endfor %}
   </div>
 </section>
 
+<div class="grid two">
+  <section class="card">
+    <div class="section-head"><div><h2>История пакета</h2><p class="muted">Последние изменения структуры.</p></div></div>
+    {% for row in activity_rows %}
+      <div class="activity-row"><span>{{ row.created_at|date:"d.m.Y H:i" }}</span><b>{{ row.message }}</b><small>{{ row.actor|default:"Система" }}</small></div>
+    {% empty %}<p class="muted">История появится после изменений.</p>{% endfor %}
+  </section>
+
+  <section class="card danger-zone">
+    <div>
+      <h2>Разобрать пакет</h2>
+      <p class="muted">Сам пакет будет удалён, но файлы не удалятся. Они вернутся на уровень договора или стороны.</p>
+    </div>
+    <form method="post" action="{% url 'operation_disband' object.pk %}?view={{ viewpoint.pk }}" onsubmit="return confirm('Разобрать пакет? Все файлы сохранятся, но будут отвязаны от него.');">
+      {% csrf_token %}
+      <button class="btn danger" type="submit">Разобрать пакет</button>
+    </form>
+  </section>
+</div>
+
 <script>
-(function () {
-  const form = document.querySelector("[data-operation-drop]");
-  if (!form) return;
-  const zone = form.querySelector(".operation-drop-zone");
-  const input = form.querySelector('input[type="file"]');
-  const label = form.querySelector("[data-operation-file-label]");
-
-  function updateLabel() {
-    if (!input.files.length) {
-      label.textContent = "Можно выбрать несколько файлов сразу";
-      zone.classList.remove("has-files");
-      return;
-    }
+(function(){
+  const form=document.querySelector("[data-operation-drop]");
+  if(!form)return;
+  const zone=form.querySelector(".operation-drop-zone");
+  const input=form.querySelector('input[type="file"]');
+  const label=form.querySelector("[data-operation-file-label]");
+  function update(){
+    if(!input.files.length){label.textContent="Можно выбрать несколько файлов сразу";zone.classList.remove("has-files");return;}
     zone.classList.add("has-files");
-    label.textContent = input.files.length === 1
-      ? input.files[0].name
-      : "Выбрано файлов: " + input.files.length;
+    label.textContent=input.files.length===1?input.files[0].name:"Выбрано файлов: "+input.files.length;
   }
-
-  ["dragenter", "dragover"].forEach(function (type) {
-    zone.addEventListener(type, function (event) {
-      event.preventDefault();
-      zone.classList.add("dragover");
-    });
-  });
-  ["dragleave", "drop"].forEach(function (type) {
-    zone.addEventListener(type, function (event) {
-      event.preventDefault();
-      zone.classList.remove("dragover");
-    });
-  });
-  zone.addEventListener("drop", function (event) {
-    if (event.dataTransfer && event.dataTransfer.files.length) {
-      input.files = event.dataTransfer.files;
-      updateLabel();
-    }
-  });
-  input.addEventListener("change", updateLabel);
+  ["dragenter","dragover"].forEach(function(type){zone.addEventListener(type,function(e){e.preventDefault();zone.classList.add("dragover");});});
+  ["dragleave","drop"].forEach(function(type){zone.addEventListener(type,function(e){e.preventDefault();zone.classList.remove("dragover");});});
+  zone.addEventListener("drop",function(e){if(e.dataTransfer&&e.dataTransfer.files.length){input.files=e.dataTransfer.files;update();}});
+  input.addEventListener("change",update);
 })();
 </script>
 {% endblock %}

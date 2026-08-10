@@ -199,7 +199,7 @@ class DocumentUploadForm(StyledFormMixin, forms.Form):
     document_type = forms.ModelChoiceField(label="Тип документа", queryset=DocumentType.objects.none(), required=False)
     counterparty = forms.ModelChoiceField(label="Вторая сторона", queryset=Counterparty.objects.none(), required=False)
     contract = forms.ModelChoiceField(label="Договор", queryset=Contract.objects.none(), required=False)
-    operation = forms.ModelChoiceField(label="Пакет / операция", queryset=DocumentOperation.objects.none(), required=False)
+    operation = forms.ModelChoiceField(label="Пакет", queryset=DocumentOperation.objects.none(), required=False)
     location = forms.ModelChoiceField(label="Объект", queryset=Location.objects.none(), required=False)
     equipment = forms.ModelMultipleChoiceField(
         label="Оборудование", queryset=Equipment.objects.none(), required=False, widget=forms.SelectMultiple(attrs={"size": 7})
@@ -221,10 +221,10 @@ class DocumentUploadForm(StyledFormMixin, forms.Form):
         self.fields["operation"].queryset = DocumentOperation.objects.select_related("organization", "counterparty", "contract")
         self.fields["location"].queryset = Location.objects.filter(archived=False).select_related("organization")
         self.fields["equipment"].queryset = Equipment.objects.filter(archived=False).select_related("owner", "category")
-        self.fields["document_type"].empty_label = "Неразобранное"
+        self.fields["document_type"].empty_label = "Тип не определён"
         self.fields["counterparty"].empty_label = "Не указан"
         self.fields["contract"].empty_label = "Не привязан"
-        self.fields["operation"].empty_label = "Вне операции"
+        self.fields["operation"].empty_label = "Вне пакета"
         self.fields["location"].empty_label = "Не связан"
         self.fields["document_date"].initial = None
         if not self.is_bound:
@@ -258,6 +258,14 @@ class DocumentUploadForm(StyledFormMixin, forms.Form):
         counterparty = data.get("counterparty")
         location = data.get("location")
         equipment = data.get("equipment")
+        files = data.get("files") or []
+        if len(files) > 1:
+            for field_name in ("document_date", "number", "amount", "title"):
+                if data.get(field_name) not in (None, ""):
+                    self.add_error(
+                        field_name,
+                        "Это реквизит одного документа. Для нескольких файлов заполните его после загрузки в карточке конкретного файла.",
+                    )
         if operation:
             if organization and operation.organization_id != organization.id:
                 self.add_error("operation", "Операция относится к другой организации.")
@@ -295,8 +303,19 @@ class DocumentEditForm(StyledFormMixin, forms.ModelForm):
     class Meta:
         model = DocumentRecord
         fields = [
-            "organization", "document_type", "counterparty", "contract", "operation", "location", "equipment",
-            "title", "number", "document_date", "amount", "file", "notes",
+            "organization",
+            "document_type",
+            "counterparty",
+            "contract",
+            "operation",
+            "location",
+            "equipment",
+            "title",
+            "number",
+            "document_date",
+            "amount",
+            "file",
+            "notes",
         ]
         widgets = {
             "document_date": forms.DateInput(attrs={"type": "date"}),
@@ -308,17 +327,38 @@ class DocumentEditForm(StyledFormMixin, forms.ModelForm):
         super().__init__(*args, **kwargs)
         self.apply_styles()
         self.fields["amount"].localize = True
-        self.fields["organization"].queryset = Organization.objects.filter(archived=False, kind=Organization.Kind.COMPANY)
-        self.fields["document_type"].queryset = DocumentType.objects.filter(archived=False)
-        self.fields["counterparty"].queryset = Counterparty.objects.filter(archived=False)
-        self.fields["contract"].queryset = Contract.objects.filter(archived=False).select_related("organization", "counterparty")
-        self.fields["operation"].queryset = DocumentOperation.objects.select_related("organization", "counterparty", "contract")
-        self.fields["location"].queryset = Location.objects.filter(archived=False).select_related("organization")
-        self.fields["equipment"].queryset = Equipment.objects.filter(archived=False).select_related("owner", "category")
-        self.fields["document_type"].empty_label = "Неразобранное"
+        self.fields["organization"].queryset = Organization.objects.filter(
+            archived=False,
+            kind=Organization.Kind.COMPANY,
+        )
+        self.fields["document_type"].queryset = DocumentType.objects.filter(
+            archived=False
+        )
+        self.fields["counterparty"].queryset = Counterparty.objects.filter(
+            archived=False
+        )
+        self.fields["contract"].queryset = Contract.objects.filter(
+            archived=False
+        ).select_related("organization", "counterparty")
+        self.fields["operation"].queryset = (
+            DocumentOperation.objects.select_related(
+                "organization",
+                "counterparty",
+                "contract",
+            )
+        )
+        self.fields["location"].queryset = Location.objects.filter(
+            archived=False
+        ).select_related("organization")
+        self.fields["equipment"].queryset = Equipment.objects.filter(
+            archived=False
+        ).select_related("owner", "category")
+        self.fields["document_type"].empty_label = "Тип не определён"
+        self.fields["counterparty"].label = "Вторая сторона"
         self.fields["counterparty"].empty_label = "Не указан"
         self.fields["contract"].empty_label = "Не привязан"
-        self.fields["operation"].empty_label = "Вне операции"
+        self.fields["operation"].label = "Пакет"
+        self.fields["operation"].empty_label = "Вне пакета"
         self.fields["location"].empty_label = "Не связан"
 
     def clean(self):
@@ -326,16 +366,76 @@ class DocumentEditForm(StyledFormMixin, forms.ModelForm):
         organization = data.get("organization")
         counterparty = data.get("counterparty")
         contract = data.get("contract")
+        operation = data.get("operation")
         location = data.get("location")
         equipment = data.get("equipment")
-        if contract and organization and contract.organization_id != organization.id:
-            self.add_error("contract", "Договор относится к другой организации.")
-        if contract and counterparty and contract.counterparty_id != counterparty.id:
-            self.add_error("counterparty", "Контрагент не совпадает с контрагентом договора.")
-        if location and organization and location.organization_id != organization.id:
-            self.add_error("location", "Объект относится к другой организации.")
-        if equipment and organization and equipment.exclude(owner=organization).exists():
-            self.add_error("equipment", "В списке есть оборудование другого владельца.")
+
+        if operation:
+            if (
+                organization
+                and operation.organization_id != organization.id
+            ):
+                self.add_error(
+                    "operation",
+                    "Пакет относится к другой организации.",
+                )
+            if (
+                counterparty
+                and operation.counterparty_id != counterparty.id
+            ):
+                self.add_error(
+                    "operation",
+                    "Пакет относится к другой второй стороне.",
+                )
+            if (
+                contract
+                and operation.contract_id != contract.id
+            ):
+                self.add_error(
+                    "operation",
+                    "Пакет относится к другому договору.",
+                )
+            if contract is None and operation.contract_id:
+                data["contract"] = operation.contract
+            if counterparty is None and operation.counterparty_id:
+                data["counterparty"] = operation.counterparty
+
+        if (
+            contract
+            and organization
+            and contract.organization_id != organization.id
+        ):
+            self.add_error(
+                "contract",
+                "Договор относится к другой организации.",
+            )
+        if (
+            contract
+            and counterparty
+            and contract.counterparty_id != counterparty.id
+        ):
+            self.add_error(
+                "counterparty",
+                "Вторая сторона не совпадает со стороной договора.",
+            )
+        if (
+            location
+            and organization
+            and location.organization_id != organization.id
+        ):
+            self.add_error(
+                "location",
+                "Объект относится к другой организации.",
+            )
+        if (
+            equipment
+            and organization
+            and equipment.exclude(owner=organization).exists()
+        ):
+            self.add_error(
+                "equipment",
+                "В списке есть оборудование другого владельца.",
+            )
         return data
 
 

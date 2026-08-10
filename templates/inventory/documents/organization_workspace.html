@@ -74,7 +74,7 @@
         <b>{{ parties_total }}</b> сторон ·
         <b>{{ contracts_total }}</b> договоров ·
         <b>{{ operations_total }}</b> пакетов ·
-        <b>{{ documents_total }}</b> документов
+        <b>{{ documents_total }}</b> файлов
       </span>
     </div>
 
@@ -97,7 +97,7 @@
           <div class="party-choice-stats">
             <span><b>{{ party.contract_count }}</b> договоров</span>
             <span><b>{{ party.operation_count }}</b> пакетов</span>
-            <span><b>{{ party.document_count }}</b> документов</span>
+            <span><b>{{ party.document_count }}</b> файлов</span>
           </div>
 
           <small class="party-choice-activity">
@@ -106,7 +106,7 @@
             {% elif party.contract_count or party.operation_count or party.document_count %}
               Есть данные без даты
             {% else %}
-              Сторона добавлена, документов пока нет
+              Сторона добавлена, файлов пока нет
             {% endif %}
           </small>
         </a>
@@ -154,7 +154,7 @@
     </div>
     <div class="relationship-actionbar-buttons">
       <a class="btn" href="{% url 'contract_add' %}?organization={{ organization.pk }}&counterparty={{ selected_party.form_counterparty_id }}&view={{ organization.pk }}">+ Договор</a>
-      <a class="btn" href="{% url 'operation_add' %}?organization={{ organization.pk }}&counterparty={{ selected_party.form_counterparty_id }}&view={{ organization.pk }}">+ Пакет / операция</a>
+      <a class="btn" href="{% url 'operation_add' %}?organization={{ organization.pk }}&counterparty={{ selected_party.form_counterparty_id }}&view={{ organization.pk }}">+ Пакет</a>
       <a class="btn primary" href="{% url 'document_upload' %}?organization={{ organization.pk }}&counterparty={{ selected_party.form_counterparty_id }}&view={{ organization.pk }}">+ Документ</a>
     </div>
   </nav>
@@ -162,7 +162,7 @@
   <div class="relationship-summary-line">
     <span><b>{{ selected_contracts_total }}</b> договоров</span>
     <span><b>{{ selected_operations_total }}</b> пакетов</span>
-    <span><b>{{ selected_documents_total }}</b> документов</span>
+    <span><b>{{ selected_documents_total }}</b> файлов</span>
     <span><b>{{ selected_reminders_total }}</b> напоминаний</span>
   </div>
 
@@ -172,6 +172,12 @@
         <span class="eyebrow">Новая связь</span>
         <h2>{{ selected_party.name }} добавлен</h2>
         <p>Сторона уже сохранена. Выберите, с чего начинается работа — система сама подставит {{ organization }} и {{ selected_party.name }}.</p>
+        {% if not selected_party.internal and selected_party.counterparty_id %}
+          <form method="post" action="{% url 'organization_party_unlink' organization.pk selected_party.counterparty_id %}" class="empty-party-unlink" onsubmit="return confirm('Отключить эту сторону от организации?');">
+            {% csrf_token %}
+            <button class="text-button danger-text" type="submit">Отключить ошибочно добавленную сторону</button>
+          </form>
+        {% endif %}
       </div>
       <div class="relationship-start-actions">
         <a class="start-action-card" href="{% url 'contract_add' %}?organization={{ organization.pk }}&counterparty={{ selected_party.form_counterparty_id }}&view={{ organization.pk }}">
@@ -267,7 +273,7 @@
                   </span>
                   <span class="relationship-operation-main">
                     <b>{{ operation.object.title }}</b>
-                    <small>{{ operation.document_count }} документов{% if operation.object.amount %} · {{ operation.object.amount }} ₽{% endif %}</small>
+                    <small>{{ operation.document_count }} файлов{% if operation.object.amount %} · {{ operation.object.amount }} ₽{% endif %}</small>
                     {% if operation.documents %}
                       <span class="operation-doc-chips">
                         {% for document in operation.documents|slice:":4" %}
@@ -311,7 +317,7 @@
         </span>
         <span class="relationship-operation-main">
           <b>{{ operation.object.title }}</b>
-          <small>{{ operation.document_count }} документов</small>
+          <small>{{ operation.document_count }} файлов</small>
           {% if operation.documents %}
             <span class="operation-doc-chips">
               {% for document in operation.documents|slice:":4" %}

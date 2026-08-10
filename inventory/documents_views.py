@@ -10,7 +10,7 @@ from django.core.exceptions import ValidationError
 from django.core.files.storage import default_storage
 from django.core.paginator import Paginator
 from django.db import transaction
-from django.db.models import Count, Q
+from django.db.models import Count, Prefetch, Q
 from django.http import FileResponse, Http404, HttpResponseForbidden
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
@@ -33,6 +33,8 @@ from .document_forms import (
 from .models import (
     Contract,
     Counterparty,
+    DocumentActivity,
+    DocumentFileVersion,
     DocumentOperation,
     DocumentRecord,
     DocumentType,
@@ -176,6 +178,115 @@ def _relationship_context_label(organization, counterparty, contract=None, opera
     if operation is not None:
         label += f" · {operation}"
     return label
+
+
+
+def _file_sha256(uploaded):
+    import hashlib
+
+    digest = hashlib.sha256()
+    for chunk in uploaded.chunks():
+        digest.update(chunk)
+    try:
+        uploaded.seek(0)
+    except (AttributeError, OSError):
+        pass
+    return digest.hexdigest()
+
+
+def _duplicate_document_for_hash(file_sha256, exclude_pk=None):
+    if not file_sha256:
+        return None
+    qs = DocumentRecord.objects.filter(
+        file_sha256=file_sha256,
+        trashed_at__isnull=True,
+    )
+    if exclude_pk:
+        qs = qs.exclude(pk=exclude_pk)
+    return qs.select_related(
+        "organization",
+        "counterparty",
+        "contract",
+        "operation",
+    ).first()
+
+
+def _log_document_activity(
+    *,
+    action,
+    message,
+    user=None,
+    document=None,
+    operation=None,
+    contract=None,
+    organization=None,
+    counterparty=None,
+):
+    if document is not None:
+        organization = organization or document.organization
+        counterparty = counterparty or document.counterparty
+        contract = contract or document.contract
+        operation = operation or document.operation
+    elif operation is not None:
+        organization = organization or operation.organization
+        counterparty = counterparty or operation.counterparty
+        contract = contract or operation.contract
+
+    return DocumentActivity.objects.create(
+        action=action,
+        message=message[:500],
+        actor=user,
+        organization=organization,
+        counterparty=counterparty,
+        contract=contract,
+        operation=operation,
+        document=document,
+    )
+
+
+def _view_query(request, fallback_organization=None):
+    raw = request.GET.get("view", "").strip()
+    if raw.isdigit():
+        return f"?view={raw}"
+    if fallback_organization is not None:
+        return f"?view={fallback_organization.pk}"
+    return ""
+
+
+def _safe_return_url(request, fallback):
+    candidate = (
+        request.POST.get("next", "").strip()
+        or request.GET.get("next", "").strip()
+    )
+    if candidate and url_has_allowed_host_and_scheme(
+        candidate,
+        allowed_hosts={request.get_host()},
+        require_https=request.is_secure(),
+    ):
+        return candidate
+    return fallback
+
+
+def _operation_compatible_documents(operation):
+    return DocumentRecord.objects.filter(
+        organization_id=operation.organization_id,
+        counterparty_id=operation.counterparty_id,
+        contract_id=operation.contract_id,
+        trashed_at__isnull=True,
+    )
+
+
+def _operation_compatible_operations(operation):
+    return (
+        DocumentOperation.objects.filter(
+            organization_id=operation.organization_id,
+            counterparty_id=operation.counterparty_id,
+            contract_id=operation.contract_id,
+        )
+        .exclude(pk=operation.pk)
+        .order_by("-operation_date", "-created_at", "-pk")
+    )
+
 
 
 def _counterparty_ids_for_organization(organization):
@@ -421,6 +532,8 @@ def operation_detail(request, pk):
                 if other_party
                 else str(viewpoint)
             ),
+            "compatible_operations": _operation_compatible_operations(obj),
+            "activity_rows": obj.activity.select_related("actor")[:20],
         },
     )
 
@@ -438,14 +551,18 @@ def operation_quick_upload(request, pk):
         pk=pk,
     )
     uploaded_files = request.FILES.getlist("files")
+    target = obj.get_absolute_url() + _view_query(
+        request,
+        obj.organization,
+    )
+
     if not uploaded_files:
         messages.error(request, "Выберите хотя бы один файл.")
-        target = obj.get_absolute_url()
-        if request.GET.get("view"):
-            target += f"?view={request.GET['view']}"
         return redirect(target)
 
-    valid_files = []
+    prepared = []
+    selected_hashes = set()
+
     for uploaded in uploaded_files:
         try:
             validate_business_document(uploaded)
@@ -454,42 +571,211 @@ def operation_quick_upload(request, pk):
                 request,
                 f"{uploaded.name}: {'; '.join(exc.messages)}",
             )
-            target = obj.get_absolute_url()
-            if request.GET.get("view"):
-                target += f"?view={request.GET['view']}"
             return redirect(target)
-        valid_files.append(uploaded)
 
+        file_hash = _file_sha256(uploaded)
+        if file_hash in selected_hashes:
+            messages.error(
+                request,
+                f"{uploaded.name}: этот же файл выбран дважды.",
+            )
+            return redirect(target)
+
+        duplicate = _duplicate_document_for_hash(file_hash)
+        if duplicate is not None:
+            messages.error(
+                request,
+                (
+                    f"{uploaded.name}: такой файл уже есть в FOX Inventory "
+                    f"как «{duplicate.display_title}»."
+                ),
+            )
+            return redirect(target)
+
+        selected_hashes.add(file_hash)
+        inferred_type = _infer_document_type_from_filename(
+            uploaded.name
+        )
+        prepared.append(
+            (
+                uploaded,
+                file_hash,
+                inferred_type,
+            )
+        )
+
+    created = []
     with transaction.atomic():
         _ensure_party_link(
             obj.organization,
             obj.counterparty,
             request.user,
         )
-        for uploaded in valid_files:
-            DocumentRecord.objects.create(
+        for uploaded, file_hash, inferred_type in prepared:
+            document = DocumentRecord.objects.create(
                 organization=obj.organization,
-                document_type=_infer_document_type_from_filename(
-                    uploaded.name
+                document_type=inferred_type,
+                classification_source=(
+                    DocumentRecord.ClassificationSource.FILENAME
+                    if inferred_type is not None
+                    else DocumentRecord.ClassificationSource.UNKNOWN
                 ),
                 counterparty=obj.counterparty,
                 contract=obj.contract,
                 operation=obj,
                 location=obj.location,
-                document_date=obj.operation_date,
+                document_date=None,
                 file=uploaded,
                 original_name=uploaded.name,
+                file_sha256=file_hash,
                 created_by=request.user,
+            )
+            created.append(document)
+            _log_document_activity(
+                action="uploaded",
+                message=f"Файл «{uploaded.name}» добавлен в пакет.",
+                user=request.user,
+                document=document,
+                operation=obj,
             )
 
     messages.success(
         request,
-        f"В пакет добавлено файлов: {len(valid_files)}.",
+        (
+            f"В пакет добавлено файлов: {len(created)}. "
+            "Дата документа не подставлялась автоматически."
+        ),
     )
-    target = obj.get_absolute_url()
-    if request.GET.get("view"):
-        target += f"?view={request.GET['view']}"
     return redirect(target)
+
+
+@login_required
+@require_POST
+def operation_remove_document(request, pk, document_pk):
+    operation = get_object_or_404(DocumentOperation, pk=pk)
+    document = get_object_or_404(
+        DocumentRecord,
+        pk=document_pk,
+        operation=operation,
+        trashed_at__isnull=True,
+    )
+    document.operation = None
+    document.save(update_fields=["operation", "updated_at"])
+    _log_document_activity(
+        action="removed_from_package",
+        message=f"«{document.display_title}» убран из пакета «{operation}».",
+        user=request.user,
+        document=document,
+        operation=operation,
+    )
+    messages.success(
+        request,
+        f"{document.display_title} теперь находится вне пакета.",
+    )
+    return redirect(
+        operation.get_absolute_url()
+        + _view_query(request, operation.organization)
+    )
+
+
+@login_required
+@require_POST
+def operation_move_document(request, pk, document_pk):
+    source = get_object_or_404(DocumentOperation, pk=pk)
+    document = get_object_or_404(
+        DocumentRecord,
+        pk=document_pk,
+        operation=source,
+        trashed_at__isnull=True,
+    )
+    target_raw = request.POST.get("target_operation", "").strip()
+    if not target_raw.isdigit():
+        messages.error(request, "Выберите пакет назначения.")
+        return redirect(
+            source.get_absolute_url()
+            + _view_query(request, source.organization)
+        )
+
+    target = get_object_or_404(DocumentOperation, pk=int(target_raw))
+    if (
+        target.organization_id != source.organization_id
+        or target.counterparty_id != source.counterparty_id
+        or target.contract_id != source.contract_id
+    ):
+        messages.error(
+            request,
+            "Перемещать документ можно только между пакетами одной пары сторон и одного договора.",
+        )
+        return redirect(
+            source.get_absolute_url()
+            + _view_query(request, source.organization)
+        )
+
+    document.operation = target
+    document.save(update_fields=["operation", "updated_at"])
+    _log_document_activity(
+        action="moved_package",
+        message=f"«{document.display_title}» перемещён из «{source}» в «{target}».",
+        user=request.user,
+        document=document,
+        operation=target,
+    )
+    messages.success(
+        request,
+        f"{document.display_title} перемещён в пакет «{target}».",
+    )
+    return redirect(
+        target.get_absolute_url()
+        + _view_query(request, source.organization)
+    )
+
+
+@login_required
+@require_POST
+def operation_disband(request, pk):
+    operation = get_object_or_404(
+        DocumentOperation.objects.select_related(
+            "organization",
+            "counterparty",
+            "contract",
+        ),
+        pk=pk,
+    )
+    viewpoint = _relationship_viewpoint(
+        request,
+        operation.organization,
+        operation.counterparty,
+    )
+    relationship_url, _ = _relationship_url(
+        viewpoint,
+        operation.organization,
+        operation.counterparty,
+    )
+    documents = list(
+        operation.documents.filter(
+            trashed_at__isnull=True
+        ).only("pk")
+    )
+    count = len(documents)
+
+    with transaction.atomic():
+        _log_document_activity(
+            action="package_disbanded",
+            message=f"Пакет «{operation}» разобран. Файлов: {count}.",
+            user=request.user,
+            operation=operation,
+        )
+        operation.documents.update(operation=None)
+        operation.delete()
+
+    messages.success(
+        request,
+        (
+            f"Пакет разобран. {count} файлов сохранены "
+            "и возвращены на уровень договора/стороны."
+        ),
+    )
+    return redirect(relationship_url)
 
 
 @login_required
@@ -586,6 +872,12 @@ def operation_form(request, pk=None):
             saved.counterparty,
             request.user,
         )
+        _log_document_activity(
+            action="package_edited" if obj else "package_created",
+            message=f'Пакет «{saved}» сохранён.',
+            user=request.user,
+            operation=saved,
+        )
         messages.success(request, "Пакет сохранён.")
 
         target = saved.get_absolute_url()
@@ -669,12 +961,28 @@ def operation_from_documents(request):
             "contract",
             "location",
             "document_type",
+            "operation",
         )
         .order_by("pk")
     )
 
     if not documents:
-        messages.error(request, "Выберите хотя бы один документ.")
+        messages.error(request, "Выберите хотя бы один файл вне пакета.")
+        return redirect("document_list")
+
+    already_grouped = [
+        item
+        for item in documents
+        if item.operation_id is not None
+    ]
+    if already_grouped:
+        messages.error(
+            request,
+            (
+                "Один или несколько выбранных файлов уже находятся в пакете. "
+                "Для перемещения используйте меню файла внутри пакета."
+            ),
+        )
         return redirect("document_list")
 
     first = documents[0]
@@ -688,7 +996,10 @@ def operation_from_documents(request):
     if incompatible:
         messages.error(
             request,
-            "В одну операцию можно объединить документы одной организации, контрагента и договора.",
+            (
+                "В один пакет можно собрать только файлы одной организации, "
+                "одной второй стороны и одного договора."
+            ),
         )
         return redirect("document_list")
 
@@ -699,14 +1010,11 @@ def operation_from_documents(request):
         "contract": first.contract_id,
         "location": first.location_id,
         "operation_date": operation_date,
+        "title": _suggest_operation_title(
+            first.contract,
+            operation_date,
+        ),
     }
-
-    if first.contract_id and first.contract.category == Contract.Category.SUPPLY:
-        initial["title"] = f"Поставка от {operation_date:%d.%m.%Y}"
-    elif first.contract_id:
-        initial["title"] = f"Операция — {first.contract.title}"
-    else:
-        initial["title"] = f"Операция от {operation_date:%d.%m.%Y}"
 
     has_operation_fields = bool(request.POST.get("title"))
     form = DocumentOperationForm(
@@ -722,11 +1030,39 @@ def operation_from_documents(request):
 
             for document in documents:
                 document.operation = operation
-                document.save()
+                document.save(
+                    update_fields=[
+                        "operation",
+                        "updated_at",
+                    ]
+                )
+                _log_document_activity(
+                    action="added_to_package",
+                    message=(
+                        f"«{document.display_title}» добавлен "
+                        f"в пакет «{operation}»."
+                    ),
+                    user=request.user,
+                    document=document,
+                    operation=operation,
+                )
+
+            _log_document_activity(
+                action="package_created",
+                message=(
+                    f"Создан пакет «{operation}». "
+                    f"Файлов: {len(documents)}."
+                ),
+                user=request.user,
+                operation=operation,
+            )
 
         messages.success(
             request,
-            f"Создана операция. Документов в пакете: {len(documents)}.",
+            (
+                f"Создан пакет «{operation}». "
+                f"Объединено файлов: {len(documents)}."
+            ),
         )
         return redirect(operation)
 
@@ -735,9 +1071,17 @@ def operation_from_documents(request):
         "inventory/documents/operation_form.html",
         {
             "form": form,
-            "title": "Создать операцию из документов",
-            "cancel_url": reverse("document_list"),
+            "title": "Создать пакет из файлов",
+            "cancel_url": (
+                reverse("document_list")
+                + "?mode=grouped&unpacked=1"
+            ),
             "selected_documents": documents,
+            "context_label": _relationship_context_label(
+                first.organization,
+                first.counterparty,
+                first.contract,
+            ),
         },
     )
 
@@ -1090,6 +1434,106 @@ def organization_party_add(request, pk):
     return redirect(target)
 
 
+@login_required
+@require_POST
+def organization_party_unlink(request, pk, counterparty_pk):
+    organization = get_object_or_404(
+        _organization_queryset(),
+        pk=pk,
+    )
+    counterparty = get_object_or_404(
+        Counterparty.objects.select_related("linked_organization"),
+        pk=counterparty_pk,
+        archived=False,
+    )
+    link = get_object_or_404(
+        OrganizationCounterpartyLink,
+        organization=organization,
+        counterparty=counterparty,
+        archived=False,
+    )
+
+    if counterparty.linked_organization_id:
+        messages.error(
+            request,
+            "Связь между нашими внутренними организациями является системной и не отключается.",
+        )
+        return redirect(
+            "organization_document_workspace",
+            pk=organization.pk,
+        )
+
+    descriptor = _relative_party_descriptor(
+        organization,
+        organization,
+        counterparty,
+    )
+    party_key = descriptor["key"] if descriptor else None
+
+    has_data = DocumentRecord.objects.filter(
+        organization=organization,
+        counterparty=counterparty,
+    ).exists()
+    if party_key and not has_data:
+        for queryset in (
+            _contracts_for_organization(organization),
+            _documents_for_organization(organization),
+            _operations_for_organization(organization),
+            _reminders_for_organization(organization),
+        ):
+            if any(
+                _relative_party_key(organization, item) == party_key
+                for item in queryset.select_related(
+                    "organization",
+                    "counterparty",
+                )
+            ):
+                has_data = True
+                break
+
+    if has_data:
+        messages.error(
+            request,
+            (
+                "Эту сторону нельзя отключить: с ней уже есть "
+                "договоры, пакеты, документы или напоминания."
+            ),
+        )
+        target = reverse(
+            "organization_document_workspace",
+            args=[organization.pk],
+        )
+        if descriptor:
+            target += f"?party={descriptor['key']}"
+        return redirect(target)
+
+    link.archived = True
+    link.save(update_fields=["archived", "updated_at"])
+
+    linked_org = counterparty.linked_organization
+    owner_profile = getattr(
+        organization,
+        "counterparty_profile",
+        None,
+    )
+    if linked_org is not None and owner_profile is not None:
+        OrganizationCounterpartyLink.objects.filter(
+            organization=linked_org,
+            counterparty=owner_profile,
+            archived=False,
+        ).update(archived=True)
+
+    messages.success(
+        request,
+        f"{counterparty} отключён от {organization}.",
+    )
+    return redirect(
+        "organization_document_workspace",
+        pk=organization.pk,
+    )
+
+
+
 def _paginate(request, queryset, per_page=50):
     paginator = Paginator(queryset, per_page)
     page_obj = paginator.get_page(request.GET.get("page"))
@@ -1171,61 +1615,140 @@ def reminder_rows(queryset, today=None):
 @login_required
 def document_center(request):
     organization = _selected_organization(request)
-    documents = DocumentRecord.objects.filter(trashed_at__isnull=True)
-    contracts = Contract.objects.filter(archived=False)
-    reminders = Reminder.objects.filter(active=True).select_related("organization", "counterparty", "contract", "location")
-    if organization:
-        documents = documents.filter(organization=organization)
-        contracts = contracts.filter(organization=organization)
-        reminders = reminders.filter(organization=organization)
+
+    if organization is not None:
+        documents = _documents_for_organization(organization)
+        contracts = _contracts_for_organization(organization)
+        operations = _operations_for_organization(organization)
+        reminders = _reminders_for_organization(organization)
+        counterparties = Counterparty.objects.filter(
+            organization_links__organization=organization,
+            organization_links__archived=False,
+            archived=False,
+        ).distinct()
+    else:
+        documents = DocumentRecord.objects.filter(
+            trashed_at__isnull=True
+        )
+        contracts = Contract.objects.filter(archived=False)
+        operations = DocumentOperation.objects.all()
+        reminders = Reminder.objects.filter(active=True)
+        counterparties = Counterparty.objects.filter(archived=False)
+
+    reminders = reminders.select_related(
+        "organization",
+        "counterparty",
+        "contract",
+        "location",
+    )
 
     today = timezone.localdate()
     visible_reminders = reminder_rows(
-        reminders.order_by("next_due_date", "pk")[:8], today=today
+        reminders.order_by("next_due_date", "pk")[:8],
+        today=today,
     )
 
-    counterparties = Counterparty.objects.filter(archived=False)
-    if organization:
-        counterparties = counterparties.filter(
-            Q(contracts__organization=organization, contracts__archived=False)
-            | Q(documents__organization=organization, documents__trashed_at__isnull=True)
-        ).distinct()
+    main_contract_files = contracts.exclude(main_file="").count()
+    document_files = documents.count()
+    attention = documents.filter(
+        Q(document_type__isnull=True)
+        | Q(
+            classification_source=(
+                DocumentRecord.ClassificationSource.FILENAME
+            )
+        )
+    ).count()
 
-    return render(request, "inventory/documents/center.html", {
-        "organizations": _organization_queryset(),
-        "selected_organization": organization,
-        "documents_total": documents.count(),
-        "contracts_total": contracts.count(),
-        "counterparties_total": counterparties.count(),
-        "inbox_total": documents.filter(document_type__isnull=True).count(),
-        "reminders_total": reminders.count(),
-        "recent_documents": documents.select_related("organization", "document_type", "counterparty", "contract").order_by("-created_at")[:8],
-        "recent_contracts": contracts.select_related("organization", "counterparty", "location")[:6],
-        "reminder_rows": visible_reminders,
-    })
+    return render(
+        request,
+        "inventory/documents/center.html",
+        {
+            "organizations": _organization_queryset(),
+            "selected_organization": organization,
+            "files_total": document_files + main_contract_files,
+            "document_records_total": document_files,
+            "packages_total": operations.count(),
+            "contracts_total": contracts.count(),
+            "counterparties_total": counterparties.count(),
+            "attention_total": attention,
+            "reminders_total": reminders.count(),
+            "recent_documents": (
+                documents.select_related(
+                    "organization",
+                    "document_type",
+                    "counterparty",
+                    "contract",
+                    "operation",
+                )
+                .order_by("-created_at")[:8]
+            ),
+            "recent_contracts": contracts.select_related(
+                "organization",
+                "counterparty",
+                "location",
+            )[:6],
+            "reminder_rows": visible_reminders,
+        },
+    )
 
 
 @login_required
 def document_list(request):
-    qs = DocumentRecord.objects.filter(trashed_at__isnull=True).select_related(
-        "organization", "document_type", "counterparty", "contract", "operation", "location"
-    )
     q = request.GET.get("q", "").strip()
-    organization = request.GET.get("organization", "").strip()
+    organization_raw = request.GET.get("organization", "").strip()
     document_type = request.GET.get("type", "").strip()
     counterparty = request.GET.get("counterparty", "").strip()
     contract = request.GET.get("contract", "").strip()
     year = request.GET.get("year", "").strip()
+    mode = request.GET.get("mode", "grouped").strip()
+    only_unpacked = request.GET.get("unpacked") == "1"
+    if mode not in {"grouped", "files"}:
+        mode = "grouped"
+
+    selected_org = None
+    if organization_raw.isdigit():
+        selected_org = _organization_queryset().filter(
+            pk=int(organization_raw)
+        ).first()
+
+    if selected_org is not None:
+        qs = _documents_for_organization(selected_org)
+    else:
+        qs = DocumentRecord.objects.filter(
+            trashed_at__isnull=True
+        )
+
+    qs = qs.select_related(
+        "organization",
+        "document_type",
+        "counterparty",
+        "counterparty__linked_organization",
+        "contract",
+        "operation",
+        "location",
+    )
+
     if q:
         qs = qs.filter(
-            Q(title__icontains=q) | Q(number__icontains=q) | Q(original_name__icontains=q)
-            | Q(notes__icontains=q) | Q(counterparty__name__icontains=q)
-            | Q(contract__title__icontains=q) | Q(contract__number__icontains=q) | Q(operation__title__icontains=q)
+            Q(title__icontains=q)
+            | Q(number__icontains=q)
+            | Q(original_name__icontains=q)
+            | Q(notes__icontains=q)
+            | Q(counterparty__name__icontains=q)
+            | Q(counterparty__inn__icontains=q)
+            | Q(contract__title__icontains=q)
+            | Q(contract__number__icontains=q)
+            | Q(operation__title__icontains=q)
         )
-    if organization:
-        qs = qs.filter(organization_id=organization)
-    if document_type == "inbox":
-        qs = qs.filter(document_type__isnull=True)
+    if document_type == "attention":
+        qs = qs.filter(
+            Q(document_type__isnull=True)
+            | Q(
+                classification_source=(
+                    DocumentRecord.ClassificationSource.FILENAME
+                )
+            )
+        )
     elif document_type:
         qs = qs.filter(document_type_id=document_type)
     if counterparty:
@@ -1234,48 +1757,264 @@ def document_list(request):
         qs = qs.filter(contract_id=contract)
     if year.isdigit():
         qs = qs.filter(document_date__year=int(year))
+    if only_unpacked:
+        qs = qs.filter(operation__isnull=True)
+
+    qs = qs.order_by(
+        "-document_date",
+        "-created_at",
+        "-pk",
+    )
+    matching_files_total = qs.count()
 
     years = list(
-        DocumentRecord.objects.filter(trashed_at__isnull=True, document_date__isnull=False)
-        .dates("document_date", "year", order="DESC")
+        DocumentRecord.objects.filter(
+            trashed_at__isnull=True,
+            document_date__isnull=False,
+        ).dates(
+            "document_date",
+            "year",
+            order="DESC",
+        )
     )
-    page_obj, query_string = _paginate(request, qs, 60)
-    return render(request, "inventory/documents/document_list.html", {
-        "objects": page_obj.object_list,
-        "page_obj": page_obj,
-        "query_string": query_string,
-        "q": q,
-        "selected_organization": organization,
-        "selected_type": document_type,
-        "selected_counterparty": counterparty,
-        "selected_contract": contract,
-        "selected_year": year,
-        "organizations": _organization_queryset(),
-        "document_types": DocumentType.objects.filter(archived=False),
-        "counterparties": Counterparty.objects.filter(archived=False),
-        "contracts": Contract.objects.filter(archived=False).select_related("organization", "counterparty"),
-        "years": years,
-    })
+
+    grouped_rows = []
+    page_obj = None
+    query_string = ""
+
+    if mode == "files":
+        page_obj, query_string = _paginate(request, qs, 60)
+        objects = page_obj.object_list
+        logical_total = matching_files_total
+    else:
+        matching_documents = list(qs)
+        operation_ids = {
+            item.operation_id
+            for item in matching_documents
+            if item.operation_id
+        }
+        operations = {
+            item.pk: item
+            for item in (
+                DocumentOperation.objects.filter(
+                    pk__in=operation_ids
+                )
+                .select_related(
+                    "organization",
+                    "counterparty",
+                    "counterparty__linked_organization",
+                    "contract",
+                )
+                .annotate(
+                    active_document_count=Count(
+                        "documents",
+                        filter=Q(
+                            documents__trashed_at__isnull=True
+                        ),
+                        distinct=True,
+                    )
+                )
+            )
+        }
+
+        seen_operations = set()
+        for document in matching_documents:
+            if document.operation_id:
+                if document.operation_id in seen_operations:
+                    continue
+                seen_operations.add(document.operation_id)
+                operation = operations.get(document.operation_id)
+                if operation is None:
+                    continue
+                grouped_rows.append(
+                    {
+                        "kind": "package",
+                        "operation": operation,
+                        "date": (
+                            operation.operation_date
+                            or document.document_date
+                            or operation.created_at.date()
+                        ),
+                        "documents": list(
+                            operation.documents.filter(
+                                trashed_at__isnull=True
+                            )
+                            .select_related("document_type")
+                            .order_by("document_date", "pk")
+                        ),
+                    }
+                )
+            else:
+                grouped_rows.append(
+                    {
+                        "kind": "document",
+                        "document": document,
+                        "date": (
+                            document.document_date
+                            or document.created_at.date()
+                        ),
+                    }
+                )
+
+        grouped_rows.sort(
+            key=lambda row: (
+                row["date"],
+                (
+                    row["operation"].pk
+                    if row["kind"] == "package"
+                    else row["document"].pk
+                ),
+            ),
+            reverse=True,
+        )
+        page_obj, query_string = _paginate(
+            request,
+            grouped_rows,
+            40,
+        )
+        grouped_rows = page_obj.object_list
+        objects = []
+        logical_total = page_obj.paginator.count
+
+    return render(
+        request,
+        "inventory/documents/document_list.html",
+        {
+            "objects": objects,
+            "grouped_rows": grouped_rows,
+            "page_obj": page_obj,
+            "query_string": query_string,
+            "mode": mode,
+            "q": q,
+            "selected_organization": organization_raw,
+            "selected_type": document_type,
+            "selected_counterparty": counterparty,
+            "selected_contract": contract,
+            "selected_year": year,
+            "only_unpacked": only_unpacked,
+            "matching_files_total": matching_files_total,
+            "logical_total": logical_total,
+            "organizations": _organization_queryset(),
+            "document_types": DocumentType.objects.filter(
+                archived=False
+            ),
+            "counterparties": Counterparty.objects.filter(
+                archived=False
+            ),
+            "contracts": Contract.objects.filter(
+                archived=False
+            ).select_related(
+                "organization",
+                "counterparty",
+            ),
+            "years": years,
+        },
+    )
 
 
 @login_required
 def document_inbox(request):
-    form = InboxUploadForm(request.POST or None, request.FILES or None)
+    form = InboxUploadForm(
+        request.POST or None,
+        request.FILES or None,
+    )
+
     if form.is_valid():
         organization = form.cleaned_data["organization"]
-        files = form.cleaned_data["files"]
-        with transaction.atomic():
-            for uploaded in files:
-                DocumentRecord.objects.create(
-                    organization=organization,
-                    file=uploaded,
-                    original_name=uploaded.name,
-                    created_by=request.user,
+        uploaded_files = form.cleaned_data["files"]
+        prepared = []
+        selected_hashes = set()
+
+        for uploaded in uploaded_files:
+            file_hash = _file_sha256(uploaded)
+            if file_hash in selected_hashes:
+                form.add_error(
+                    "files",
+                    f"{uploaded.name}: этот же файл выбран дважды.",
                 )
-        messages.success(request, f"В неразобранные добавлено файлов: {len(files)}.")
-        return redirect("document_inbox")
-    objects = DocumentRecord.objects.filter(trashed_at__isnull=True, document_type__isnull=True).select_related("organization", "counterparty")[:100]
-    return render(request, "inventory/documents/inbox.html", {"form": form, "objects": objects})
+                break
+
+            duplicate = _duplicate_document_for_hash(file_hash)
+            if duplicate is not None:
+                form.add_error(
+                    "files",
+                    (
+                        f"{uploaded.name}: такой файл уже есть как "
+                        f"«{duplicate.display_title}»."
+                    ),
+                )
+                break
+
+            selected_hashes.add(file_hash)
+            prepared.append((uploaded, file_hash))
+
+        if not form.errors:
+            with transaction.atomic():
+                for uploaded, file_hash in prepared:
+                    document = DocumentRecord.objects.create(
+                        organization=organization,
+                        classification_source=(
+                            DocumentRecord.ClassificationSource.UNKNOWN
+                        ),
+                        file=uploaded,
+                        original_name=uploaded.name,
+                        file_sha256=file_hash,
+                        created_by=request.user,
+                    )
+                    _log_document_activity(
+                        action="uploaded_attention",
+                        message=(
+                            f"Файл «{uploaded.name}» загружен "
+                            "в очередь разбора."
+                        ),
+                        user=request.user,
+                        document=document,
+                    )
+
+            messages.success(
+                request,
+                f"В очередь разбора добавлено файлов: {len(prepared)}.",
+            )
+            return redirect("document_inbox")
+
+    attention_qs = (
+        DocumentRecord.objects.filter(
+            trashed_at__isnull=True,
+        )
+        .filter(
+            Q(document_type__isnull=True)
+            | Q(
+                classification_source=(
+                    DocumentRecord.ClassificationSource.FILENAME
+                )
+            )
+        )
+        .select_related(
+            "organization",
+            "counterparty",
+            "document_type",
+            "operation",
+            "contract",
+        )
+        .order_by("-created_at", "-pk")
+    )
+    page_obj, query_string = _paginate(
+        request,
+        attention_qs,
+        50,
+    )
+
+    return render(
+        request,
+        "inventory/documents/inbox.html",
+        {
+            "form": form,
+            "objects": page_obj.object_list,
+            "page_obj": page_obj,
+            "query_string": query_string,
+            "attention_total": attention_qs.count(),
+        },
+    )
 
 
 @login_required
@@ -1313,7 +2052,10 @@ def document_upload(request):
         initial_counterparty = initial_contract.counterparty
     elif request.GET.get("equipment"):
         initial_equipment = get_object_or_404(
-            Equipment.objects.select_related("owner", "location"),
+            Equipment.objects.select_related(
+                "owner",
+                "location",
+            ),
             pk=request.GET["equipment"],
             archived=False,
         )
@@ -1385,72 +2127,142 @@ def document_upload(request):
 
     if form.is_valid():
         data = form.cleaned_data
-        files = data["files"]
+        uploaded_files = data["files"]
         equipment = list(data["equipment"])
-        created = []
+        prepared = []
+        selected_hashes = set()
 
-        _ensure_party_link(
-            data["organization"],
-            data.get("counterparty"),
-            request.user,
-        )
+        for uploaded in uploaded_files:
+            file_hash = _file_sha256(uploaded)
+            if file_hash in selected_hashes:
+                form.add_error(
+                    "files",
+                    f"{uploaded.name}: этот же файл выбран дважды.",
+                )
+                break
 
-        with transaction.atomic():
-            for uploaded in files:
-                document_type = data.get("document_type")
-                if document_type is None:
-                    document_type = _infer_document_type_from_filename(
-                        uploaded.name
+            duplicate = _duplicate_document_for_hash(file_hash)
+            if duplicate is not None:
+                form.add_error(
+                    "files",
+                    (
+                        f"{uploaded.name}: такой файл уже есть "
+                        f"как «{duplicate.display_title}»."
+                    ),
+                )
+                break
+
+            selected_hashes.add(file_hash)
+            document_type = data.get("document_type")
+            source = DocumentRecord.ClassificationSource.MANUAL
+            if document_type is None:
+                document_type = _infer_document_type_from_filename(
+                    uploaded.name
+                )
+                source = (
+                    DocumentRecord.ClassificationSource.FILENAME
+                    if document_type is not None
+                    else DocumentRecord.ClassificationSource.UNKNOWN
+                )
+            prepared.append(
+                (
+                    uploaded,
+                    file_hash,
+                    document_type,
+                    source,
+                )
+            )
+
+        if not form.errors:
+            created = []
+            _ensure_party_link(
+                data["organization"],
+                data.get("counterparty"),
+                request.user,
+            )
+
+            with transaction.atomic():
+                for (
+                    uploaded,
+                    file_hash,
+                    document_type,
+                    source,
+                ) in prepared:
+                    document = DocumentRecord.objects.create(
+                        organization=data["organization"],
+                        document_type=document_type,
+                        classification_source=source,
+                        counterparty=data.get("counterparty"),
+                        contract=data.get("contract"),
+                        operation=data.get("operation"),
+                        location=data.get("location"),
+                        title=(
+                            data.get("title", "")
+                            if len(prepared) == 1
+                            else ""
+                        ),
+                        number=(
+                            data.get("number", "")
+                            if len(prepared) == 1
+                            else ""
+                        ),
+                        document_date=(
+                            data.get("document_date")
+                            if len(prepared) == 1
+                            else None
+                        ),
+                        amount=(
+                            data.get("amount")
+                            if len(prepared) == 1
+                            else None
+                        ),
+                        file=uploaded,
+                        original_name=uploaded.name,
+                        file_sha256=file_hash,
+                        notes=data.get("notes", ""),
+                        created_by=request.user,
+                    )
+                    if equipment:
+                        document.equipment.set(equipment)
+                    created.append(document)
+                    _log_document_activity(
+                        action="uploaded",
+                        message=f"Загружен файл «{uploaded.name}».",
+                        user=request.user,
+                        document=document,
                     )
 
-                document = DocumentRecord.objects.create(
-                    organization=data["organization"],
-                    document_type=document_type,
-                    counterparty=data.get("counterparty"),
-                    contract=data.get("contract"),
-                    operation=data.get("operation"),
-                    location=data.get("location"),
-                    title=data.get("title", ""),
-                    number=data.get("number", ""),
-                    document_date=data.get("document_date"),
-                    amount=data.get("amount"),
-                    file=uploaded,
-                    original_name=uploaded.name,
-                    notes=data.get("notes", ""),
-                    created_by=request.user,
+            messages.success(
+                request,
+                f"Загружено файлов: {len(created)}.",
+            )
+
+            viewpoint = request.GET.get("view", "").strip()
+            view_query = (
+                f"?view={viewpoint}"
+                if viewpoint.isdigit()
+                else ""
+            )
+
+            if initial_operation is not None:
+                return redirect(
+                    initial_operation.get_absolute_url()
+                    + view_query
                 )
-                if equipment:
-                    document.equipment.set(equipment)
-                created.append(document)
+            if initial_contract is not None and len(created) > 1:
+                return redirect(
+                    initial_contract.get_absolute_url()
+                    + view_query
+                )
+            if len(created) == 1:
+                target = created[0].get_absolute_url()
+                if viewpoint.isdigit():
+                    target += view_query
+                return redirect(target)
 
-        messages.success(
-            request,
-            f"Загружено документов: {len(created)}.",
-        )
-
-        viewpoint = request.GET.get("view", "").strip()
-        view_query = (
-            f"?view={viewpoint}"
-            if viewpoint.isdigit()
-            else ""
-        )
-
-        if initial_operation is not None:
             return redirect(
-                initial_operation.get_absolute_url()
-                + view_query
+                reverse("document_list") + "?mode=grouped"
             )
-        if initial_contract is not None and len(created) > 1:
-            return redirect(
-                initial_contract.get_absolute_url()
-                + view_query
-            )
-        if len(created) == 1:
-            target = created[0].get_absolute_url()
-            if viewpoint.isdigit():
-                target += view_query
-            return redirect(target)
-        return redirect("document_list")
 
     if initial_operation is not None:
         cancel_url = initial_operation.get_absolute_url()
@@ -1590,7 +2402,7 @@ def document_detail(request, pk):
             "operation",
             "location",
             "created_by",
-        ).prefetch_related("equipment"),
+        ).prefetch_related("equipment", "file_versions"),
         pk=pk,
         trashed_at__isnull=True,
     )
@@ -1609,7 +2421,7 @@ def document_detail(request, pk):
     view_query = f"?view={viewpoint.pk}"
     if obj.operation_id:
         back_url = obj.operation.get_absolute_url() + view_query
-        back_label = "К операции"
+        back_label = "К пакету"
         sequence_qs = (
             DocumentRecord.objects.filter(
                 operation_id=obj.operation_id,
@@ -1634,7 +2446,7 @@ def document_detail(request, pk):
         sequence_label = "Документы договора"
     else:
         back_url = relationship_url
-        back_label = "К документам организации"
+        back_label = "К документам стороны"
         sequence_qs = (
             DocumentRecord.objects.filter(
                 organization_id=obj.organization_id,
@@ -1672,40 +2484,170 @@ def document_detail(request, pk):
         and default_storage.exists(obj.file.name)
     )
     kind = _preview_kind(obj.file) if file_exists else "none"
-    extension = Path(obj.file.name).suffix.lower().lstrip(".") if obj.file else ""
+    extension = (
+        Path(obj.file.name).suffix.lower().lstrip(".")
+        if obj.file
+        else ""
+    )
 
-    return render(request, "inventory/documents/document_detail.html", {
-        "object": obj,
-        "viewpoint": viewpoint,
-        "other_party": other_party,
-        "relationship_url": relationship_url,
-        "back_url": back_url,
-        "back_label": back_label,
-        "preview_kind": kind,
-        "preview_available": kind in {"pdf", "image"},
-        "preview_label": _preview_label(kind, extension),
-        "file_extension": extension,
-        "previous_document": previous_document,
-        "next_document": next_document,
-        "sequence_position": sequence_index + 1 if sequence else 1,
-        "sequence_total": len(sequence) if sequence else 1,
-        "sequence_label": sequence_label,
-    })
+    return render(
+        request,
+        "inventory/documents/document_detail.html",
+        {
+            "object": obj,
+            "viewpoint": viewpoint,
+            "other_party": other_party,
+            "relationship_url": relationship_url,
+            "back_url": back_url,
+            "back_label": back_label,
+            "preview_kind": kind,
+            "preview_available": kind in {"pdf", "image"},
+            "preview_label": _preview_label(kind, extension),
+            "file_extension": extension,
+            "previous_document": previous_document,
+            "next_document": next_document,
+            "sequence_position": (
+                sequence_index + 1
+                if sequence
+                else 1
+            ),
+            "sequence_total": len(sequence) if sequence else 1,
+            "sequence_label": sequence_label,
+            "file_versions": obj.file_versions.select_related(
+                "created_by"
+            )[:10],
+            "activity_rows": obj.activity.select_related(
+                "actor"
+            )[:20],
+            "edit_url": (
+                reverse("document_edit", args=[obj.pk])
+                + view_query
+            ),
+        },
+    )
 
 
 @login_required
 def document_edit(request, pk):
-    obj = get_object_or_404(DocumentRecord, pk=pk, trashed_at__isnull=True)
-    form = DocumentEditForm(request.POST or None, request.FILES or None, instance=obj)
+    obj = get_object_or_404(
+        DocumentRecord.objects.select_related(
+            "organization",
+            "counterparty",
+            "contract",
+            "operation",
+            "document_type",
+        ),
+        pk=pk,
+        trashed_at__isnull=True,
+    )
+    viewpoint = _relationship_viewpoint(
+        request,
+        obj.organization,
+        obj.counterparty,
+    )
+    fallback_url = (
+        obj.get_absolute_url()
+        + f"?view={viewpoint.pk}"
+    )
+    old_file_name = obj.file.name if obj.file else ""
+    old_original_name = obj.original_name
+    old_hash = obj.file_sha256
+    old_type_id = obj.document_type_id
+    old_operation_id = obj.operation_id
+
+    form = DocumentEditForm(
+        request.POST or None,
+        request.FILES or None,
+        instance=obj,
+    )
+
     if form.is_valid():
-        form.save()
-        messages.success(request, "Документ сохранён.")
-        return redirect(obj)
-    return render(request, "inventory/documents/document_form.html", {
-        "form": form,
-        "title": "Изменить документ",
-        "object": obj,
-    })
+        uploaded = request.FILES.get("file")
+        new_hash = old_hash
+        if uploaded is not None:
+            new_hash = _file_sha256(uploaded)
+            duplicate = _duplicate_document_for_hash(
+                new_hash,
+                exclude_pk=obj.pk,
+            )
+            if duplicate is not None:
+                form.add_error(
+                    "file",
+                    (
+                        "Такой файл уже есть в FOX Inventory "
+                        f"как «{duplicate.display_title}»."
+                    ),
+                )
+
+        if not form.errors:
+            with transaction.atomic():
+                saved = form.save(commit=False)
+                if saved.document_type_id:
+                    saved.classification_source = (
+                        DocumentRecord.ClassificationSource.MANUAL
+                    )
+                else:
+                    saved.classification_source = (
+                        DocumentRecord.ClassificationSource.UNKNOWN
+                    )
+                if uploaded is not None:
+                    saved.original_name = uploaded.name
+                    saved.file_sha256 = new_hash
+                saved.save()
+                form.save_m2m()
+
+                if (
+                    uploaded is not None
+                    and old_file_name
+                    and old_file_name != saved.file.name
+                ):
+                    DocumentFileVersion.objects.create(
+                        document=saved,
+                        file=old_file_name,
+                        original_name=old_original_name,
+                        file_sha256=old_hash,
+                        created_by=request.user,
+                    )
+
+                changes = []
+                if old_type_id != saved.document_type_id:
+                    changes.append("тип документа")
+                if old_operation_id != saved.operation_id:
+                    changes.append("пакет")
+                if uploaded is not None:
+                    changes.append("файл")
+                message = (
+                    "Изменены: " + ", ".join(changes) + "."
+                    if changes
+                    else "Изменены реквизиты документа."
+                )
+                _log_document_activity(
+                    action="edited",
+                    message=message,
+                    user=request.user,
+                    document=saved,
+                )
+
+            messages.success(request, "Документ сохранён.")
+            return redirect(fallback_url)
+
+    return render(
+        request,
+        "inventory/documents/document_form.html",
+        {
+            "form": form,
+            "title": "Изменить документ",
+            "object": obj,
+            "cancel_url": fallback_url,
+            "context_label": _relationship_context_label(
+                obj.organization,
+                obj.counterparty,
+                obj.contract,
+                obj.operation,
+            ),
+            "multiple": False,
+        },
+    )
 
 
 @login_required
@@ -1731,6 +2673,45 @@ def document_download(request, pk):
     )
     filename = obj.original_name or Path(obj.file.name).name
     return _storage_file_response(obj.file, "attachment", filename)
+
+
+@login_required
+@xframe_options_sameorigin
+def document_version_preview(request, pk, version_pk):
+    version = get_object_or_404(
+        DocumentFileVersion.objects.select_related("document"),
+        pk=version_pk,
+        document_id=pk,
+    )
+    if _preview_kind(version.file) not in {"pdf", "image"}:
+        raise Http404
+    filename = (
+        version.original_name
+        or Path(version.file.name).name
+    )
+    return _storage_file_response(
+        version.file,
+        "inline",
+        filename,
+    )
+
+
+@login_required
+def document_version_download(request, pk, version_pk):
+    version = get_object_or_404(
+        DocumentFileVersion.objects.select_related("document"),
+        pk=version_pk,
+        document_id=pk,
+    )
+    filename = (
+        version.original_name
+        or Path(version.file.name).name
+    )
+    return _storage_file_response(
+        version.file,
+        "attachment",
+        filename,
+    )
 
 
 @login_required
@@ -1765,7 +2746,7 @@ def contract_file_view(request, pk):
     )
     kind = _preview_kind(obj.main_file) if file_exists else "none"
     extension = Path(obj.main_file.name).suffix.lower().lstrip(".")
-    filename = Path(obj.main_file.name).name
+    filename = obj.main_file_original_name or Path(obj.main_file.name).name
 
     return render(request, "inventory/documents/contract_file_detail.html", {
         "object": obj,
@@ -1789,7 +2770,7 @@ def contract_file_preview(request, pk):
     return _storage_file_response(
         obj.main_file,
         "inline",
-        Path(obj.main_file.name).name,
+        obj.main_file_original_name or Path(obj.main_file.name).name,
     )
 
 
@@ -1801,34 +2782,98 @@ def contract_file_download(request, pk):
     return _storage_file_response(
         obj.main_file,
         "attachment",
-        Path(obj.main_file.name).name,
+        obj.main_file_original_name or Path(obj.main_file.name).name,
     )
 
 
 @login_required
 @require_POST
 def document_trash(request, pk):
-    obj = get_object_or_404(DocumentRecord, pk=pk, trashed_at__isnull=True)
+    obj = get_object_or_404(
+        DocumentRecord,
+        pk=pk,
+        trashed_at__isnull=True,
+    )
+    fallback = reverse("document_list")
+    if obj.operation_id:
+        fallback = obj.operation.get_absolute_url()
+    elif obj.contract_id:
+        fallback = obj.contract.get_absolute_url()
+
     obj.trashed_at = timezone.now()
     obj.save(update_fields=["trashed_at", "updated_at"])
-    messages.success(request, "Документ перемещён в корзину.")
-    return redirect("document_list")
+    _log_document_activity(
+        action="trashed",
+        message=f"«{obj.display_title}» перемещён в корзину.",
+        user=request.user,
+        document=obj,
+    )
+    messages.success(
+        request,
+        "Документ перемещён в корзину.",
+    )
+    return redirect(
+        _safe_return_url(
+            request,
+            fallback,
+        )
+    )
 
 
 @login_required
 def document_trash_list(request):
-    objects = DocumentRecord.objects.filter(trashed_at__isnull=False).select_related("organization", "document_type", "counterparty", "contract")[:200]
-    return render(request, "inventory/documents/trash.html", {"objects": objects})
+    qs = (
+        DocumentRecord.objects.filter(
+            trashed_at__isnull=False
+        )
+        .select_related(
+            "organization",
+            "document_type",
+            "counterparty",
+            "contract",
+            "operation",
+        )
+        .order_by("-trashed_at", "-pk")
+    )
+    page_obj, query_string = _paginate(
+        request,
+        qs,
+        50,
+    )
+    return render(
+        request,
+        "inventory/documents/trash.html",
+        {
+            "objects": page_obj.object_list,
+            "page_obj": page_obj,
+            "query_string": query_string,
+        },
+    )
 
 
 @login_required
 @require_POST
 def document_restore(request, pk):
-    obj = get_object_or_404(DocumentRecord, pk=pk, trashed_at__isnull=False)
+    obj = get_object_or_404(
+        DocumentRecord,
+        pk=pk,
+        trashed_at__isnull=False,
+    )
     obj.trashed_at = None
     obj.save(update_fields=["trashed_at", "updated_at"])
+    _log_document_activity(
+        action="restored",
+        message=f"«{obj.display_title}» восстановлен из корзины.",
+        user=request.user,
+        document=obj,
+    )
     messages.success(request, "Документ восстановлен.")
-    return redirect(obj)
+    return redirect(
+        _safe_return_url(
+            request,
+            obj.get_absolute_url(),
+        )
+    )
 
 
 @login_required
@@ -1836,12 +2881,27 @@ def document_restore(request, pk):
 def document_delete_permanently(request, pk):
     if not request.user.is_staff:
         return HttpResponseForbidden("Недостаточно прав.")
-    obj = get_object_or_404(DocumentRecord, pk=pk, trashed_at__isnull=False)
-    file_name = obj.file.name if obj.file else ""
+    obj = get_object_or_404(
+        DocumentRecord.objects.prefetch_related("file_versions"),
+        pk=pk,
+        trashed_at__isnull=False,
+    )
+    file_names = set()
+    if obj.file and obj.file.name:
+        file_names.add(obj.file.name)
+    for version in obj.file_versions.all():
+        if version.file and version.file.name:
+            file_names.add(version.file.name)
+
     obj.delete()
-    if file_name and default_storage.exists(file_name):
-        default_storage.delete(file_name)
-    messages.success(request, "Документ удалён окончательно.")
+    for file_name in file_names:
+        if default_storage.exists(file_name):
+            default_storage.delete(file_name)
+
+    messages.success(
+        request,
+        "Документ и сохранённые версии удалены окончательно.",
+    )
     return redirect("document_trash_list")
 
 
@@ -1849,23 +2909,105 @@ def document_delete_permanently(request, pk):
 def counterparty_list(request):
     q = request.GET.get("q", "").strip()
     show_archived = request.GET.get("archived") == "1"
-    qs = Counterparty.objects.filter(archived=show_archived).select_related("linked_organization").annotate(
-        contract_count=Count("contracts", filter=Q(contracts__archived=False), distinct=True),
-        document_count=Count("documents", filter=Q(documents__trashed_at__isnull=True), distinct=True),
+    qs = (
+        Counterparty.objects.filter(archived=show_archived)
+        .select_related("linked_organization")
+        .order_by("name")
     )
     if q:
-        qs = qs.filter(Q(name__icontains=q) | Q(short_name__icontains=q) | Q(inn__icontains=q))
-    return render(request, "inventory/documents/counterparty_list.html", {"objects": qs, "q": q, "show_archived": show_archived})
+        qs = qs.filter(
+            Q(name__icontains=q)
+            | Q(short_name__icontains=q)
+            | Q(inn__icontains=q)
+        )
+
+    objects = list(qs)
+    for item in objects:
+        if item.linked_organization_id:
+            item.contract_count = _contracts_for_organization(
+                item.linked_organization,
+            ).count()
+            item.document_count = _documents_for_organization(
+                item.linked_organization,
+            ).count()
+        else:
+            item.contract_count = item.contracts.filter(
+                archived=False
+            ).count()
+            item.document_count = item.documents.filter(
+                trashed_at__isnull=True
+            ).count()
+
+    return render(
+        request,
+        "inventory/documents/counterparty_list.html",
+        {
+            "objects": objects,
+            "q": q,
+            "show_archived": show_archived,
+        },
+    )
 
 
 @login_required
 def counterparty_detail(request, pk):
-    obj = get_object_or_404(Counterparty, pk=pk)
-    return render(request, "inventory/documents/counterparty_detail.html", {
-        "object": obj,
-        "contracts": obj.contracts.select_related("organization", "location").filter(archived=False),
-        "documents": obj.documents.select_related("organization", "document_type", "contract").filter(trashed_at__isnull=True)[:30],
-    })
+    obj = get_object_or_404(
+        Counterparty.objects.select_related(
+            "linked_organization"
+        ),
+        pk=pk,
+    )
+
+    if obj.linked_organization_id:
+        contracts = _contracts_for_organization(
+            obj.linked_organization,
+        ).select_related(
+            "organization",
+            "counterparty",
+            "location",
+        )
+        documents = _documents_for_organization(
+            obj.linked_organization,
+        ).select_related(
+            "organization",
+            "counterparty",
+            "document_type",
+            "contract",
+            "operation",
+        )
+    else:
+        contracts = obj.contracts.select_related(
+            "organization",
+            "location",
+        ).filter(archived=False)
+        documents = obj.documents.select_related(
+            "organization",
+            "document_type",
+            "contract",
+            "operation",
+        ).filter(trashed_at__isnull=True)
+
+    page_obj, query_string = _paginate(
+        request,
+        documents.order_by(
+            "-document_date",
+            "-created_at",
+            "-pk",
+        ),
+        50,
+    )
+
+    return render(
+        request,
+        "inventory/documents/counterparty_detail.html",
+        {
+            "object": obj,
+            "contracts": contracts,
+            "documents": page_obj.object_list,
+            "page_obj": page_obj,
+            "query_string": query_string,
+        },
+    )
 
 
 @login_required
@@ -1946,28 +3088,76 @@ def counterparty_form(request, pk=None):
 @login_required
 def contract_list(request):
     q = request.GET.get("q", "").strip()
-    organization = request.GET.get("organization", "").strip()
+    organization_raw = request.GET.get(
+        "organization",
+        "",
+    ).strip()
     category = request.GET.get("category", "").strip()
     show_archived = request.GET.get("archived") == "1"
-    qs = Contract.objects.filter(archived=show_archived).select_related("organization", "counterparty", "location", "responsible_employee").annotate(
-        document_count=Count("documents", filter=Q(documents__trashed_at__isnull=True), distinct=True),
-        reminder_count=Count("reminders", filter=Q(reminders__active=True), distinct=True),
+
+    selected_org = None
+    if organization_raw.isdigit():
+        selected_org = _organization_queryset().filter(
+            pk=int(organization_raw)
+        ).first()
+
+    if selected_org is not None:
+        qs = _contracts_for_organization(
+            selected_org,
+            archived=show_archived,
+        )
+    else:
+        qs = Contract.objects.filter(
+            archived=show_archived
+        )
+
+    qs = (
+        qs.select_related(
+            "organization",
+            "counterparty",
+            "counterparty__linked_organization",
+            "location",
+            "responsible_employee",
+        )
+        .annotate(
+            document_count=Count(
+                "documents",
+                filter=Q(
+                    documents__trashed_at__isnull=True
+                ),
+                distinct=True,
+            ),
+            reminder_count=Count(
+                "reminders",
+                filter=Q(reminders__active=True),
+                distinct=True,
+            ),
+        )
     )
+
     if q:
-        qs = qs.filter(Q(title__icontains=q) | Q(number__icontains=q) | Q(counterparty__name__icontains=q))
-    if organization:
-        qs = qs.filter(organization_id=organization)
+        qs = qs.filter(
+            Q(title__icontains=q)
+            | Q(number__icontains=q)
+            | Q(counterparty__name__icontains=q)
+            | Q(organization__name__icontains=q)
+        )
     if category in dict(Contract.Category.choices):
         qs = qs.filter(category=category)
-    return render(request, "inventory/documents/contract_list.html", {
-        "objects": qs,
-        "q": q,
-        "organizations": _organization_queryset(),
-        "selected_organization": organization,
-        "categories": Contract.Category.choices,
-        "selected_category": category,
-        "show_archived": show_archived,
-    })
+
+    return render(
+        request,
+        "inventory/documents/contract_list.html",
+        {
+            "objects": qs,
+            "q": q,
+            "organizations": _organization_queryset(),
+            "selected_organization": organization_raw,
+            "categories": Contract.Category.choices,
+            "selected_category": category,
+            "show_archived": show_archived,
+        },
+    )
 
 
 @login_required
@@ -2014,13 +3204,25 @@ def contract_detail(request, pk):
     if other_party:
         relationship_back_url += f"?party={other_party['key']}"
 
-    operations = obj.operations.select_related(
-        "organization", "counterparty", "location"
-    ).annotate(
-        document_count=Count(
-            "documents",
-            filter=Q(documents__trashed_at__isnull=True),
-            distinct=True,
+    operations = list(
+        obj.operations.select_related(
+            "organization", "counterparty", "location"
+        )
+        .annotate(
+            document_count=Count(
+                "documents",
+                filter=Q(documents__trashed_at__isnull=True),
+                distinct=True,
+            )
+        )
+        .prefetch_related(
+            Prefetch(
+                "documents",
+                queryset=DocumentRecord.objects.filter(
+                    trashed_at__isnull=True
+                ).select_related("document_type").order_by("document_date", "pk"),
+                to_attr="active_documents",
+            )
         )
     )
     contract_documents = (
@@ -2111,6 +3313,9 @@ def contract_form(request, pk=None):
         saved = form.save(commit=False)
         if saved.pk is None:
             saved.created_by = request.user
+        uploaded_main_file = request.FILES.get("main_file")
+        if uploaded_main_file is not None:
+            saved.main_file_original_name = uploaded_main_file.name
         saved.save()
         form.save_m2m()
 

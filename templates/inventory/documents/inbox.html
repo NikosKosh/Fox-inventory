@@ -1,10 +1,73 @@
 {% extends "base.html" %}
-{% block title %}Неразобранные — FOX Inventory<script id="file-drop-script">document.querySelectorAll('[data-file-drop]').forEach((zone)=>{const input=zone.querySelector('input[type=file]');if(!input)return;['dragenter','dragover'].forEach(type=>zone.addEventListener(type,e=>{e.preventDefault();zone.classList.add('dragover')}));['dragleave','drop'].forEach(type=>zone.addEventListener(type,e=>{e.preventDefault();zone.classList.remove('dragover')}));zone.addEventListener('drop',e=>{if(e.dataTransfer&&e.dataTransfer.files.length){input.files=e.dataTransfer.files;zone.classList.add('has-files')}});input.addEventListener('change',()=>zone.classList.toggle('has-files',input.files.length>0));});</script>
-{% endblock %}
+{% block title %}Требует внимания — FOX Inventory{% endblock %}
 {% block content %}
-<div class="page-head"><div><h1>Неразобранные</h1><p class="muted">Быстрая загрузка без лишних полей. Классифицировать можно позже.</p></div><a class="btn" href="{% url 'document_upload' %}">Полная форма</a></div>
+<div class="page-head">
+  <div>
+    <span class="eyebrow">Контроль качества</span>
+    <h1>Требует внимания</h1>
+    <p class="muted">Здесь два случая: тип не определён либо FOX Inventory только предположил его по имени файла. Это не значит, что документ лежит не в том пакете.</p>
+  </div>
+  <a class="btn" href="{% url 'document_upload' %}">Полная загрузка</a>
+</div>
+
 {% include "inventory/documents/_nav.html" %}
-<section class="card drop-card"><form method="post" enctype="multipart/form-data" class="document-form">{% csrf_token %}<div class="form-grid">{% for field in form %}<label class="field {% if field.name == 'files' %}field-wide file-drop-zone{% endif %}" {% if field.name == 'files' %}data-file-drop{% endif %}><span>{{ field.label }}</span>{{ field }}{% for error in field.errors %}<small class="error">{{ error }}</small>{% endfor %}</label>{% endfor %}</div><button class="btn primary" type="submit">Загрузить в неразобранные</button></form></section>
-<section class="card"><div class="section-head"><h2>Ожидают разбора</h2><span class="count-pill">{{ objects|length }}</span></div>{% for item in objects %}<a class="row-link" href="{% url 'document_edit' item.pk %}"><span><b>{{ item.original_name }}</b><small>{{ item.organization }} · загружен {{ item.created_at|date:"d.m.Y H:i" }}</small></span><small>Разобрать →</small></a>{% empty %}<p class="muted">Неразобранных документов нет.</p>{% endfor %}</section>
-<script id="file-drop-script">document.querySelectorAll('[data-file-drop]').forEach((zone)=>{const input=zone.querySelector('input[type=file]');if(!input)return;['dragenter','dragover'].forEach(type=>zone.addEventListener(type,e=>{e.preventDefault();zone.classList.add('dragover')}));['dragleave','drop'].forEach(type=>zone.addEventListener(type,e=>{e.preventDefault();zone.classList.remove('dragover')}));zone.addEventListener('drop',e=>{if(e.dataTransfer&&e.dataTransfer.files.length){input.files=e.dataTransfer.files;zone.classList.add('has-files')}});input.addEventListener('change',()=>zone.classList.toggle('has-files',input.files.length>0));});</script>
+
+<section class="card drop-card">
+  <div class="section-head"><div><h2>Быстро положить на разбор</h2><p class="muted">Файлы сохранятся без выдуманных дат и реквизитов.</p></div></div>
+  <form method="post" enctype="multipart/form-data" class="document-form">
+    {% csrf_token %}
+    <div class="form-grid">
+      {% for field in form %}
+        <label class="field {% if field.name == 'files' %}field-wide file-drop-zone{% endif %}" {% if field.name == 'files' %}data-file-drop{% endif %}>
+          <span>{{ field.label }}</span>{{ field }}
+          {% for error in field.errors %}<small class="error">{{ error }}</small>{% endfor %}
+        </label>
+      {% endfor %}
+    </div>
+    <button class="btn primary" type="submit">Добавить в очередь</button>
+  </form>
+</section>
+
+<section class="card">
+  <div class="section-head">
+    <div><h2>Очередь проверки</h2><p class="muted">Откройте карточку и подтвердите тип или заполните недостающие реквизиты.</p></div>
+    <span class="count-pill">{{ attention_total }}</span>
+  </div>
+  {% for item in objects %}
+    <a class="row-link" href="{% url 'document_edit' item.pk %}">
+      <span>
+        <b>{{ item.original_name }}</b>
+        <small>
+          {{ item.organization }}
+          {% if item.counterparty %} ↔ {{ item.counterparty }}{% endif %}
+          {% if item.operation %} · {{ item.operation }}{% endif %}
+        </small>
+      </span>
+      <span class="attention-reason">
+        {% if not item.document_type %}Тип не определён{% else %}Предположено: {{ item.document_type }}{% endif %} →
+      </span>
+    </a>
+  {% empty %}
+    <p class="muted">Очередь проверки пуста.</p>
+  {% endfor %}
+</section>
+
+{% if page_obj.has_other_pages %}
+<nav class="pagination">
+  {% if page_obj.has_previous %}<a href="?page={{ page_obj.previous_page_number }}">←</a>{% endif %}
+  <span>{{ page_obj.number }} / {{ page_obj.paginator.num_pages }}</span>
+  {% if page_obj.has_next %}<a href="?page={{ page_obj.next_page_number }}">→</a>{% endif %}
+</nav>
+{% endif %}
+
+<script>
+document.querySelectorAll("[data-file-drop]").forEach(function(zone){
+  const input=zone.querySelector('input[type="file"]');
+  if(!input)return;
+  ["dragenter","dragover"].forEach(function(type){zone.addEventListener(type,function(e){e.preventDefault();zone.classList.add("dragover");});});
+  ["dragleave","drop"].forEach(function(type){zone.addEventListener(type,function(e){e.preventDefault();zone.classList.remove("dragover");});});
+  zone.addEventListener("drop",function(e){if(e.dataTransfer&&e.dataTransfer.files.length){input.files=e.dataTransfer.files;zone.classList.add("has-files");}});
+  input.addEventListener("change",function(){zone.classList.toggle("has-files",input.files.length>0);});
+});
+</script>
 {% endblock %}
