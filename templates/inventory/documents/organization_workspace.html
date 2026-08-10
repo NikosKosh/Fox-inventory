@@ -277,7 +277,7 @@
                     {% if operation.documents %}
                       <span class="operation-doc-chips">
                         {% for document in operation.documents|slice:":4" %}
-                          <span>{{ document.document_type|default:"Документ" }}{% if document.number %} №{{ document.number }}{% endif %}</span>
+                          <span>{{ document.display_title }}</span>
                         {% endfor %}
                         {% if operation.document_count > 4 %}<span>+{{ operation.document_count|add:"-4" }}</span>{% endif %}
                       </span>
@@ -321,7 +321,7 @@
           {% if operation.documents %}
             <span class="operation-doc-chips">
               {% for document in operation.documents|slice:":4" %}
-                <span>{{ document.document_type|default:"Документ" }}{% if document.number %} №{{ document.number }}{% endif %}</span>
+                <span>{{ document.display_title }}</span>
               {% endfor %}
             </span>
           {% endif %}

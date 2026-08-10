@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.4.1 — 2026-08-10
+
+- Fixed all four regressions found by the full 1.4.0 diagnostic suite.
+- Grouped registry standalone rows now show the original filename.
+- Package previews in the relationship workspace now show the actual document title.
+- Duplicate blocking is strict and contextual: same content, same original filename and same logical container.
+- Equal-content files with different names are allowed.
+- Added a regression test for equal-content files with different names.
+
 ## 1.4.0 — 2026-08-10
 
 - Replaced the flat everyday “Documents” concept with a grouped “Registry”: one package is one logical record, while the technical “All files” mode remains available.

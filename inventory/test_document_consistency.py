@@ -273,7 +273,7 @@ class DocumentConsistencySafetyTests(TestCase):
         )
         self.assertTrue(document.file_sha256)
 
-    def test_duplicate_binary_is_rejected_on_second_upload(self):
+    def test_strict_duplicate_is_rejected_on_second_upload(self):
         operation = DocumentOperation.objects.create(
             organization=self.org,
             counterparty=self.cp,
@@ -304,7 +304,7 @@ class DocumentConsistencySafetyTests(TestCase):
             {
                 "files": [
                     SimpleUploadedFile(
-                        "copy.pdf",
+                        "first.pdf",
                         PDF,
                         content_type="application/pdf",
                     )
@@ -317,6 +317,41 @@ class DocumentConsistencySafetyTests(TestCase):
                 operation=operation
             ).count(),
             1,
+        )
+
+    def test_equal_content_with_different_names_is_allowed(self):
+        operation = DocumentOperation.objects.create(
+            organization=self.org,
+            counterparty=self.cp,
+            title="Комплект одинакового содержимого",
+            created_by=self.user,
+        )
+        response = self.client.post(
+            reverse(
+                "operation_quick_upload",
+                args=[operation.pk],
+            ),
+            {
+                "files": [
+                    SimpleUploadedFile(
+                        "Счет 77.pdf",
+                        PDF,
+                        content_type="application/pdf",
+                    ),
+                    SimpleUploadedFile(
+                        "УПД 77.pdf",
+                        PDF,
+                        content_type="application/pdf",
+                    ),
+                ]
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(
+            DocumentRecord.objects.filter(
+                operation=operation
+            ).count(),
+            2,
         )
 
     def test_multi_file_form_rejects_shared_document_requisites(self):

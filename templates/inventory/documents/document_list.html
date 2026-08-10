@@ -88,6 +88,7 @@
             <span class="relationship-doc-icon">{{ row.document.document_type.name|slice:":1"|default:"?" }}</span>
             <span>
               <b>{{ row.document.display_title }}</b>
+              <small class="registry-file-name">{{ row.document.original_name }}</small>
               <small>
                 {{ row.document.organization }}
                 {% if row.document.counterparty %} ↔ {{ row.document.counterparty }}{% endif %}

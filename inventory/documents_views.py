@@ -194,15 +194,36 @@ def _file_sha256(uploaded):
     return digest.hexdigest()
 
 
-def _duplicate_document_for_hash(file_sha256, exclude_pk=None):
-    if not file_sha256:
+def _duplicate_document_for_hash(
+    file_sha256,
+    original_name="",
+    *,
+    organization=None,
+    counterparty=None,
+    contract=None,
+    operation=None,
+    exclude_pk=None,
+):
+    """Return only a strict duplicate in the same logical context.
+
+    Equal bytes alone are not enough: generated or blank PDFs can legitimately
+    represent different business documents.
+    """
+    if not file_sha256 or not original_name:
         return None
+
     qs = DocumentRecord.objects.filter(
         file_sha256=file_sha256,
+        original_name__iexact=original_name,
         trashed_at__isnull=True,
+        organization=organization,
+        counterparty=counterparty,
+        contract=contract,
+        operation=operation,
     )
     if exclude_pk:
         qs = qs.exclude(pk=exclude_pk)
+
     return qs.select_related(
         "organization",
         "counterparty",
@@ -561,7 +582,7 @@ def operation_quick_upload(request, pk):
         return redirect(target)
 
     prepared = []
-    selected_hashes = set()
+    selected_files = set()
 
     for uploaded in uploaded_files:
         try:
@@ -574,25 +595,33 @@ def operation_quick_upload(request, pk):
             return redirect(target)
 
         file_hash = _file_sha256(uploaded)
-        if file_hash in selected_hashes:
+        selected_key = (file_hash, uploaded.name.casefold())
+        if selected_key in selected_files:
             messages.error(
                 request,
                 f"{uploaded.name}: этот же файл выбран дважды.",
             )
             return redirect(target)
 
-        duplicate = _duplicate_document_for_hash(file_hash)
+        duplicate = _duplicate_document_for_hash(
+            file_hash,
+            uploaded.name,
+            organization=obj.organization,
+            counterparty=obj.counterparty,
+            contract=obj.contract,
+            operation=obj,
+        )
         if duplicate is not None:
             messages.error(
                 request,
                 (
-                    f"{uploaded.name}: такой файл уже есть в FOX Inventory "
+                    f"{uploaded.name}: такой файл уже есть в этом пакете "
                     f"как «{duplicate.display_title}»."
                 ),
             )
             return redirect(target)
 
-        selected_hashes.add(file_hash)
+        selected_files.add(selected_key)
         inferred_type = _infer_document_type_from_filename(
             uploaded.name
         )
@@ -1923,29 +1952,37 @@ def document_inbox(request):
         organization = form.cleaned_data["organization"]
         uploaded_files = form.cleaned_data["files"]
         prepared = []
-        selected_hashes = set()
+        selected_files = set()
 
         for uploaded in uploaded_files:
             file_hash = _file_sha256(uploaded)
-            if file_hash in selected_hashes:
+            selected_key = (file_hash, uploaded.name.casefold())
+            if selected_key in selected_files:
                 form.add_error(
                     "files",
                     f"{uploaded.name}: этот же файл выбран дважды.",
                 )
                 break
 
-            duplicate = _duplicate_document_for_hash(file_hash)
+            duplicate = _duplicate_document_for_hash(
+                file_hash,
+                uploaded.name,
+                organization=organization,
+                counterparty=None,
+                contract=None,
+                operation=None,
+            )
             if duplicate is not None:
                 form.add_error(
                     "files",
                     (
-                        f"{uploaded.name}: такой файл уже есть как "
-                        f"«{duplicate.display_title}»."
+                        f"{uploaded.name}: такой файл уже есть в очереди "
+                        f"как «{duplicate.display_title}»."
                     ),
                 )
                 break
 
-            selected_hashes.add(file_hash)
+            selected_files.add(selected_key)
             prepared.append((uploaded, file_hash))
 
         if not form.errors:
@@ -2130,29 +2167,37 @@ def document_upload(request):
         uploaded_files = data["files"]
         equipment = list(data["equipment"])
         prepared = []
-        selected_hashes = set()
+        selected_files = set()
 
         for uploaded in uploaded_files:
             file_hash = _file_sha256(uploaded)
-            if file_hash in selected_hashes:
+            selected_key = (file_hash, uploaded.name.casefold())
+            if selected_key in selected_files:
                 form.add_error(
                     "files",
                     f"{uploaded.name}: этот же файл выбран дважды.",
                 )
                 break
 
-            duplicate = _duplicate_document_for_hash(file_hash)
+            duplicate = _duplicate_document_for_hash(
+                file_hash,
+                uploaded.name,
+                organization=data["organization"],
+                counterparty=data.get("counterparty"),
+                contract=data.get("contract"),
+                operation=data.get("operation"),
+            )
             if duplicate is not None:
                 form.add_error(
                     "files",
                     (
                         f"{uploaded.name}: такой файл уже есть "
-                        f"как «{duplicate.display_title}»."
+                        f"в этом же контексте как «{duplicate.display_title}»."
                     ),
                 )
                 break
 
-            selected_hashes.add(file_hash)
+            selected_files.add(selected_key)
             document_type = data.get("document_type")
             source = DocumentRecord.ClassificationSource.MANUAL
             if document_type is None:
@@ -2568,13 +2613,18 @@ def document_edit(request, pk):
             new_hash = _file_sha256(uploaded)
             duplicate = _duplicate_document_for_hash(
                 new_hash,
+                uploaded.name,
+                organization=obj.organization,
+                counterparty=obj.counterparty,
+                contract=obj.contract,
+                operation=obj.operation,
                 exclude_pk=obj.pk,
             )
             if duplicate is not None:
                 form.add_error(
                     "file",
                     (
-                        "Такой файл уже есть в FOX Inventory "
+                        "Такой файл уже есть в этом же контексте "
                         f"как «{duplicate.display_title}»."
                     ),
                 )
