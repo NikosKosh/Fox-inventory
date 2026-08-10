@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.2.4 — 2026-08-10
+
+- Added a first-class document viewer for invoices, UPDs, service acts, waybills, specifications and other attached business documents.
+- PDF files and images now open inside FOX Inventory instead of forcing users to download the original first.
+- Preview files are served through authenticated application routes; the viewer does not rely on exposing raw media URLs.
+- Document pages now keep the organization/counterparty viewpoint and show a relationship breadcrumb back through contract and operation context.
+- Added previous/next navigation inside one operation package or the contract-document set, including keyboard Left/Right navigation.
+- Unsupported Office/archive formats keep their originals intact and show a clear download fallback instead of a broken preview.
+- Main contract files now use the same protected viewer and download flow.
+- Operation cards show the first attached document names so a package is understandable before opening it.
+- Included the 1.2.3 relationship-workspace hotfix: internal organization tests now follow friendly short-name rendering and package documents are visible in the workspace.
+
 ## 1.2.3 — 2026-08-10
 
 - Rebuilt document navigation around a clear relationship context: organization → counterparty → contract → operation → documents.

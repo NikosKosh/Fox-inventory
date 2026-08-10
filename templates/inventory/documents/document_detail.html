@@ -1,10 +1,173 @@
 {% extends "base.html" %}
 {% block title %}{{ object.display_title }} — FOX Inventory{% endblock %}
 {% block content %}
-{% if object.operation %}<a class="back-link" href="{{ object.operation.get_absolute_url }}">← К операции</a>{% elif object.contract %}<a class="back-link" href="{{ object.contract.get_absolute_url }}">← К договору</a>{% else %}<a class="back-link" href="{% url 'document_list' %}">← Все документы</a>{% endif %}
-<div class="page-head"><div><span class="eyebrow">{% if object.document_type %}{{ object.document_type }}{% else %}Неразобранное{% endif %}</span><h1>{{ object.display_title }}</h1><p class="muted">{{ object.original_name }}</p></div><div class="actions"><a class="btn" href="{% url 'document_download' object.pk %}">Скачать</a><a class="btn primary" href="{% url 'document_edit' object.pk %}">Изменить</a></div></div>
+
+<a class="back-link" href="{{ back_url }}">← {{ back_label }}</a>
+
+<nav class="document-breadcrumbs" aria-label="Путь к документу">
+  <a href="{{ relationship_url }}">{{ viewpoint }}</a>
+  {% if other_party %}
+    <span>↔</span>
+    <a href="{{ relationship_url }}">{{ other_party.name }}</a>
+  {% endif %}
+  {% if object.contract %}
+    <span>›</span>
+    <a href="{{ object.contract.get_absolute_url }}?view={{ viewpoint.pk }}">{{ object.contract }}</a>
+  {% endif %}
+  {% if object.operation %}
+    <span>›</span>
+    <a href="{{ object.operation.get_absolute_url }}?view={{ viewpoint.pk }}">{{ object.operation }}</a>
+  {% endif %}
+  <span>›</span>
+  <strong>{{ object.display_title }}</strong>
+</nav>
+
+<div class="page-head document-viewer-head">
+  <div>
+    <span class="eyebrow">{% if object.document_type %}{{ object.document_type }}{% else %}Документ{% endif %}</span>
+    <h1>{{ object.display_title }}</h1>
+    <p class="muted">{{ object.original_name }}</p>
+  </div>
+  <div class="actions">
+    {% if preview_available %}
+      <a class="btn" href="{% url 'document_preview' object.pk %}" target="_blank" rel="noopener">Открыть отдельно</a>
+    {% endif %}
+    <a class="btn" href="{% url 'document_download' object.pk %}">Скачать оригинал</a>
+    <a class="btn primary" href="{% url 'document_edit' object.pk %}">Изменить</a>
+  </div>
+</div>
+
 {% include "inventory/documents/_nav.html" %}
-<div class="grid two"><section class="card"><h2>Карточка документа</h2><dl class="details"><dt>Организация</dt><dd><a href="{% url 'organization_document_workspace' object.organization.pk %}">{{ object.organization }}</a></dd><dt>Тип</dt><dd>{{ object.document_type|default:"Неразобранное" }}</dd><dt>Операция</dt><dd>{% if object.operation %}<a href="{{ object.operation.get_absolute_url }}">{{ object.operation }}</a>{% else %}Вне операции{% endif %}</dd><dt>Дата</dt><dd>{{ object.document_date|date:"d.m.Y"|default:"—" }}</dd><dt>Номер</dt><dd>{{ object.number|default:"—" }}</dd><dt>Сумма</dt><dd>{% if object.amount %}{{ object.amount }} ₽{% else %}—{% endif %}</dd><dt>Контрагент</dt><dd>{% if object.counterparty %}<a href="{{ object.counterparty.get_absolute_url }}">{{ object.counterparty }}</a>{% else %}—{% endif %}</dd><dt>Договор</dt><dd>{% if object.contract %}<a href="{{ object.contract.get_absolute_url }}">{{ object.contract }}</a>{% else %}—{% endif %}</dd><dt>Объект</dt><dd>{% if object.location %}<a href="{{ object.location.get_absolute_url }}">{{ object.location }}</a>{% else %}—{% endif %}</dd><dt>Комментарий</dt><dd>{{ object.notes|default:"—"|linebreaksbr }}</dd></dl></section>
-<section class="card"><h2>Связанное оборудование</h2>{% for item in object.equipment.all %}<a class="row-link" href="{{ item.get_absolute_url }}"><span><b>{{ item.internal_code|default:item.name }}</b><small>{{ item.name }}</small></span><small>{{ item.owner }}</small></a>{% empty %}<p class="muted">Не связано с оборудованием.</p>{% endfor %}<hr><p class="muted">Загрузил: {{ object.created_by|default:"—" }} · {{ object.created_at|date:"d.m.Y H:i" }}</p></section></div>
-<section class="card danger-zone"><div><h2>Корзина</h2><p class="muted">Файл можно восстановить из корзины. Окончательное удаление выполняется отдельно.</p></div><form method="post" action="{% url 'document_trash' object.pk %}">{% csrf_token %}<button class="btn danger" type="submit">Переместить в корзину</button></form></section>
+
+<div class="document-viewer-layout">
+  <section class="card document-viewer-panel">
+    <div class="document-viewer-toolbar">
+      <div>
+        <b>Предпросмотр</b>
+        <small>{{ preview_label }}</small>
+      </div>
+      {% if sequence_total > 1 %}
+        <span class="document-sequence-counter">{{ sequence_position }} из {{ sequence_total }}</span>
+      {% endif %}
+    </div>
+
+    <div class="document-viewer-stage {{ preview_kind }}">
+      {% if preview_kind == "pdf" %}
+        <iframe
+          src="{% url 'document_preview' object.pk %}#toolbar=1&navpanes=0&view=FitH"
+          title="Предпросмотр {{ object.display_title }}"
+          loading="eager"
+        ></iframe>
+      {% elif preview_kind == "image" %}
+        <img src="{% url 'document_preview' object.pk %}" alt="{{ object.display_title }}">
+      {% elif preview_kind == "unsupported" %}
+        <div class="document-preview-fallback">
+          <span class="document-preview-filetype">{{ file_extension|upper|default:"FILE" }}</span>
+          <h2>Предпросмотр этого формата недоступен</h2>
+          <p>Оригинал хранится в FOX Inventory. Его можно скачать без изменения файла.</p>
+          <a class="btn primary" href="{% url 'document_download' object.pk %}">Скачать {{ object.original_name|default:"файл" }}</a>
+        </div>
+      {% else %}
+        <div class="document-preview-fallback">
+          <h2>Файл не найден</h2>
+          <p>Карточка документа существует, но файл сейчас недоступен в хранилище.</p>
+        </div>
+      {% endif %}
+    </div>
+
+    {% if sequence_total > 1 %}
+    <nav class="document-sequence-nav" aria-label="Документы пакета">
+      <div>
+        {% if previous_document %}
+          <a class="document-sequence-link previous" href="{{ previous_document.get_absolute_url }}?view={{ viewpoint.pk }}">
+            <small>← Предыдущий</small>
+            <b>{{ previous_document.display_title }}</b>
+          </a>
+        {% else %}
+          <span></span>
+        {% endif %}
+      </div>
+
+      <div class="sequence-center">
+        <span>{{ sequence_position }} / {{ sequence_total }}</span>
+        <small>{{ sequence_label }}</small>
+      </div>
+
+      <div>
+        {% if next_document %}
+          <a class="document-sequence-link next" href="{{ next_document.get_absolute_url }}?view={{ viewpoint.pk }}">
+            <small>Следующий →</small>
+            <b>{{ next_document.display_title }}</b>
+          </a>
+        {% endif %}
+      </div>
+    </nav>
+    {% endif %}
+  </section>
+
+  <aside class="document-viewer-sidebar">
+    <section class="card">
+      <div class="section-head">
+        <div><h2>Реквизиты</h2><p class="muted">Данные этого файла.</p></div>
+      </div>
+      <dl class="details compact-details">
+        <dt>Тип</dt><dd>{{ object.document_type|default:"Неразобранное" }}</dd>
+        <dt>Дата</dt><dd>{{ object.document_date|date:"d.m.Y"|default:"—" }}</dd>
+        <dt>Номер</dt><dd>{{ object.number|default:"—" }}</dd>
+        <dt>Сумма</dt><dd>{% if object.amount %}{{ object.amount }} ₽{% else %}—{% endif %}</dd>
+        <dt>Организация</dt><dd><a href="{% url 'organization_document_workspace' object.organization.pk %}">{{ object.organization }}</a></dd>
+        <dt>Контрагент</dt><dd>{% if object.counterparty %}<a href="{{ object.counterparty.get_absolute_url }}">{{ object.counterparty }}</a>{% else %}—{% endif %}</dd>
+        <dt>Договор</dt><dd>{% if object.contract %}<a href="{{ object.contract.get_absolute_url }}?view={{ viewpoint.pk }}">{{ object.contract }}</a>{% else %}—{% endif %}</dd>
+        <dt>Операция</dt><dd>{% if object.operation %}<a href="{{ object.operation.get_absolute_url }}?view={{ viewpoint.pk }}">{{ object.operation }}</a>{% else %}Вне операции{% endif %}</dd>
+        <dt>Объект</dt><dd>{% if object.location %}<a href="{{ object.location.get_absolute_url }}">{{ object.location }}</a>{% else %}—{% endif %}</dd>
+      </dl>
+    </section>
+
+    {% if object.notes %}
+    <section class="card">
+      <h2>Комментарий</h2>
+      <p>{{ object.notes|linebreaksbr }}</p>
+    </section>
+    {% endif %}
+
+    <section class="card">
+      <div class="section-head"><h2>Связанное оборудование</h2></div>
+      {% for item in object.equipment.all %}
+        <a class="row-link" href="{{ item.get_absolute_url }}">
+          <span><b>{{ item.internal_code|default:item.name }}</b><small>{{ item.name }}</small></span>
+          <small>{{ item.owner }}</small>
+        </a>
+      {% empty %}
+        <p class="muted">Не связано с оборудованием.</p>
+      {% endfor %}
+      <hr>
+      <p class="muted viewer-audit">Загрузил: {{ object.created_by|default:"—" }}<br>{{ object.created_at|date:"d.m.Y H:i" }}</p>
+    </section>
+
+    <section class="card danger-zone compact-danger">
+      <div><h2>Корзина</h2><p class="muted">Документ можно восстановить после удаления.</p></div>
+      <form method="post" action="{% url 'document_trash' object.pk %}">
+        {% csrf_token %}
+        <button class="btn danger" type="submit">В корзину</button>
+      </form>
+    </section>
+  </aside>
+</div>
+
+{% if sequence_total > 1 %}
+<script>
+document.addEventListener("keydown", function (event) {
+  const tag = (event.target && event.target.tagName || "").toLowerCase();
+  if (tag === "input" || tag === "textarea" || tag === "select") return;
+  if (event.key === "ArrowLeft") {
+    const link = document.querySelector(".document-sequence-link.previous");
+    if (link) window.location.href = link.href;
+  }
+  if (event.key === "ArrowRight") {
+    const link = document.querySelector(".document-sequence-link.next");
+    if (link) window.location.href = link.href;
+  }
+});
+</script>
+{% endif %}
 {% endblock %}

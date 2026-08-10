@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% block title %}Основной договор · {{ object }} — FOX Inventory{% endblock %}
+{% block content %}
+<a class="back-link" href="{{ object.get_absolute_url }}?view={{ viewpoint.pk }}">← К договору</a>
+
+<nav class="document-breadcrumbs" aria-label="Путь к документу">
+  <a href="{{ relationship_url }}">{{ viewpoint }}</a>
+  {% if other_party %}<span>↔</span><a href="{{ relationship_url }}">{{ other_party.name }}</a>{% endif %}
+  <span>›</span>
+  <a href="{{ object.get_absolute_url }}?view={{ viewpoint.pk }}">{{ object }}</a>
+  <span>›</span>
+  <strong>Основной файл договора</strong>
+</nav>
+
+<div class="page-head document-viewer-head">
+  <div>
+    <span class="eyebrow">Договор</span>
+    <h1>{{ object }}</h1>
+    <p class="muted">{{ filename }}</p>
+  </div>
+  <div class="actions">
+    {% if preview_available %}
+      <a class="btn" href="{% url 'contract_file_preview' object.pk %}" target="_blank" rel="noopener">Открыть отдельно</a>
+    {% endif %}
+    <a class="btn" href="{% url 'contract_file_download' object.pk %}">Скачать оригинал</a>
+    <a class="btn primary" href="{% url 'contract_edit' object.pk %}">Изменить договор</a>
+  </div>
+</div>
+
+{% include "inventory/documents/_nav.html" %}
+
+<div class="document-viewer-layout">
+  <section class="card document-viewer-panel">
+    <div class="document-viewer-toolbar">
+      <div><b>Основной файл договора</b><small>{{ preview_label }}</small></div>
+    </div>
+    <div class="document-viewer-stage {{ preview_kind }}">
+      {% if preview_kind == "pdf" %}
+        <iframe src="{% url 'contract_file_preview' object.pk %}#toolbar=1&navpanes=0&view=FitH" title="{{ object }}"></iframe>
+      {% elif preview_kind == "image" %}
+        <img src="{% url 'contract_file_preview' object.pk %}" alt="{{ object }}">
+      {% elif preview_kind == "unsupported" %}
+        <div class="document-preview-fallback">
+          <span class="document-preview-filetype">{{ file_extension|upper|default:"FILE" }}</span>
+          <h2>Предпросмотр этого формата недоступен</h2>
+          <p>Оригинал договора хранится в системе и доступен для скачивания.</p>
+          <a class="btn primary" href="{% url 'contract_file_download' object.pk %}">Скачать файл</a>
+        </div>
+      {% else %}
+        <div class="document-preview-fallback"><h2>Файл не найден</h2></div>
+      {% endif %}
+    </div>
+  </section>
+
+  <aside class="document-viewer-sidebar">
+    <section class="card">
+      <h2>Карточка договора</h2>
+      <dl class="details compact-details">
+        <dt>Стороны</dt><dd>{{ viewpoint }}{% if other_party %} ↔ {{ other_party.name }}{% endif %}</dd>
+        <dt>Номер</dt><dd>{{ object.number|default:"—" }}</dd>
+        <dt>Дата</dt><dd>{{ object.contract_date|date:"d.m.Y"|default:"—" }}</dd>
+        <dt>Категория</dt><dd>{{ object.get_category_display }}</dd>
+        <dt>Объект</dt><dd>{{ object.location|default:"—" }}</dd>
+        <dt>Статус</dt><dd>{{ object.status_label }}</dd>
+      </dl>
+      <a class="btn" href="{{ object.get_absolute_url }}?view={{ viewpoint.pk }}">Открыть карточку договора</a>
+    </section>
+  </aside>
+</div>
+{% endblock %}

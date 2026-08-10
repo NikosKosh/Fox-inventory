@@ -118,7 +118,7 @@ class DocumentPartyWorkspaceTests(TestCase):
         )
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "С кем работаем?")
-        self.assertContains(response, "ООО Бета")
+        self.assertContains(response, str(self.org_b))
         self.assertContains(response, "ООО Внешний поставщик")
         self.assertNotContains(response, "Документы вне операций")
 

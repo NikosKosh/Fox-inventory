@@ -16,6 +16,7 @@ from django.urls import reverse
 from django.utils import timezone
 from django.utils.formats import date_format
 from django.utils.http import url_has_allowed_host_and_scheme
+from django.views.decorators.clickjacking import xframe_options_sameorigin
 from django.views.decorators.http import require_POST
 
 from .document_forms import (
@@ -825,14 +826,192 @@ def document_upload(request):
     return render(request, "inventory/documents/document_form.html", {"form": form, "title": "Загрузить документы", "multiple": True})
 
 
+def _preview_kind(file_field):
+    if not file_field or not getattr(file_field, "name", ""):
+        return "none"
+    extension = Path(file_field.name).suffix.lower()
+    if extension == ".pdf":
+        return "pdf"
+    if extension in {".jpg", ".jpeg", ".png", ".webp"}:
+        return "image"
+    return "unsupported"
+
+
+def _preview_label(kind, extension):
+    if kind == "pdf":
+        return "PDF · встроенный просмотр"
+    if kind == "image":
+        return "Изображение · встроенный просмотр"
+    if kind == "unsupported":
+        return f"{extension.upper() or 'Файл'} · доступен оригинал"
+    return "Файл недоступен"
+
+
+def _relationship_viewpoint(request, owner_organization, counterparty):
+    viewpoint = owner_organization
+    raw = request.GET.get("view", "").strip()
+    if not raw.isdigit():
+        return viewpoint
+
+    candidate = _organization_queryset().filter(pk=int(raw)).first()
+    if candidate is None:
+        return viewpoint
+
+    allowed_ids = {owner_organization.pk}
+    if counterparty is not None and counterparty.linked_organization_id:
+        allowed_ids.add(counterparty.linked_organization_id)
+
+    if candidate.pk in allowed_ids:
+        return candidate
+    return viewpoint
+
+
+def _relationship_url(viewpoint, owner_organization, counterparty):
+    url = reverse("organization_document_workspace", args=[viewpoint.pk])
+    descriptor = _relative_party_descriptor(
+        viewpoint,
+        owner_organization,
+        counterparty,
+    )
+    if descriptor:
+        url += f"?party={descriptor['key']}"
+    return url, descriptor
+
+
+def _storage_file_response(file_field, disposition, filename=None):
+    if (
+        not file_field
+        or not getattr(file_field, "name", "")
+        or not default_storage.exists(file_field.name)
+    ):
+        raise Http404
+
+    safe_filename = filename or Path(file_field.name).name
+    content_type = mimetypes.guess_type(safe_filename)[0] or "application/octet-stream"
+    response = FileResponse(
+        default_storage.open(file_field.name, "rb"),
+        content_type=content_type,
+    )
+    response["Content-Disposition"] = (
+        f"{disposition}; filename*=UTF-8''{quote(safe_filename)}"
+    )
+    response["X-Content-Type-Options"] = "nosniff"
+    return response
+
+
 @login_required
 def document_detail(request, pk):
     obj = get_object_or_404(
-        DocumentRecord.objects.select_related("organization", "document_type", "counterparty", "contract", "operation", "location", "created_by").prefetch_related("equipment"),
+        DocumentRecord.objects.select_related(
+            "organization",
+            "document_type",
+            "counterparty",
+            "counterparty__linked_organization",
+            "contract",
+            "operation",
+            "location",
+            "created_by",
+        ).prefetch_related("equipment"),
         pk=pk,
         trashed_at__isnull=True,
     )
-    return render(request, "inventory/documents/document_detail.html", {"object": obj})
+
+    viewpoint = _relationship_viewpoint(
+        request,
+        obj.organization,
+        obj.counterparty,
+    )
+    relationship_url, other_party = _relationship_url(
+        viewpoint,
+        obj.organization,
+        obj.counterparty,
+    )
+
+    view_query = f"?view={viewpoint.pk}"
+    if obj.operation_id:
+        back_url = obj.operation.get_absolute_url() + view_query
+        back_label = "К операции"
+        sequence_qs = (
+            DocumentRecord.objects.filter(
+                operation_id=obj.operation_id,
+                trashed_at__isnull=True,
+            )
+            .select_related("document_type")
+            .order_by("document_date", "pk")
+        )
+        sequence_label = str(obj.operation)
+    elif obj.contract_id:
+        back_url = obj.contract.get_absolute_url() + view_query
+        back_label = "К договору"
+        sequence_qs = (
+            DocumentRecord.objects.filter(
+                contract_id=obj.contract_id,
+                operation__isnull=True,
+                trashed_at__isnull=True,
+            )
+            .select_related("document_type")
+            .order_by("document_date", "pk")
+        )
+        sequence_label = "Документы договора"
+    else:
+        back_url = relationship_url
+        back_label = "К документам организации"
+        sequence_qs = (
+            DocumentRecord.objects.filter(
+                organization_id=obj.organization_id,
+                counterparty_id=obj.counterparty_id,
+                contract__isnull=True,
+                operation__isnull=True,
+                trashed_at__isnull=True,
+            )
+            .select_related("document_type")
+            .order_by("document_date", "pk")
+        )
+        sequence_label = "Документы без договора"
+
+    sequence = list(sequence_qs)
+    sequence_ids = [item.pk for item in sequence]
+    try:
+        sequence_index = sequence_ids.index(obj.pk)
+    except ValueError:
+        sequence_index = 0
+
+    previous_document = (
+        sequence[sequence_index - 1]
+        if sequence_index > 0
+        else None
+    )
+    next_document = (
+        sequence[sequence_index + 1]
+        if sequence_index + 1 < len(sequence)
+        else None
+    )
+
+    file_exists = bool(
+        obj.file
+        and obj.file.name
+        and default_storage.exists(obj.file.name)
+    )
+    kind = _preview_kind(obj.file) if file_exists else "none"
+    extension = Path(obj.file.name).suffix.lower().lstrip(".") if obj.file else ""
+
+    return render(request, "inventory/documents/document_detail.html", {
+        "object": obj,
+        "viewpoint": viewpoint,
+        "other_party": other_party,
+        "relationship_url": relationship_url,
+        "back_url": back_url,
+        "back_label": back_label,
+        "preview_kind": kind,
+        "preview_available": kind in {"pdf", "image"},
+        "preview_label": _preview_label(kind, extension),
+        "file_extension": extension,
+        "previous_document": previous_document,
+        "next_document": next_document,
+        "sequence_position": sequence_index + 1 if sequence else 1,
+        "sequence_total": len(sequence) if sequence else 1,
+        "sequence_label": sequence_label,
+    })
 
 
 @login_required
@@ -843,19 +1022,108 @@ def document_edit(request, pk):
         form.save()
         messages.success(request, "Документ сохранён.")
         return redirect(obj)
-    return render(request, "inventory/documents/document_form.html", {"form": form, "title": "Изменить документ", "object": obj})
+    return render(request, "inventory/documents/document_form.html", {
+        "form": form,
+        "title": "Изменить документ",
+        "object": obj,
+    })
+
+
+@login_required
+@xframe_options_sameorigin
+def document_preview(request, pk):
+    obj = get_object_or_404(
+        DocumentRecord,
+        pk=pk,
+        trashed_at__isnull=True,
+    )
+    if _preview_kind(obj.file) not in {"pdf", "image"}:
+        raise Http404
+    filename = obj.original_name or Path(obj.file.name).name
+    return _storage_file_response(obj.file, "inline", filename)
 
 
 @login_required
 def document_download(request, pk):
-    obj = get_object_or_404(DocumentRecord, pk=pk, trashed_at__isnull=True)
-    if not obj.file or not default_storage.exists(obj.file.name):
-        raise Http404
-    content_type = mimetypes.guess_type(obj.file.name)[0] or "application/octet-stream"
-    response = FileResponse(default_storage.open(obj.file.name, "rb"), content_type=content_type)
+    obj = get_object_or_404(
+        DocumentRecord,
+        pk=pk,
+        trashed_at__isnull=True,
+    )
     filename = obj.original_name or Path(obj.file.name).name
-    response["Content-Disposition"] = f"attachment; filename*=UTF-8''{quote(filename)}"
-    return response
+    return _storage_file_response(obj.file, "attachment", filename)
+
+
+@login_required
+def contract_file_view(request, pk):
+    obj = get_object_or_404(
+        Contract.objects.select_related(
+            "organization",
+            "counterparty",
+            "counterparty__linked_organization",
+            "location",
+        ),
+        pk=pk,
+    )
+    if not obj.main_file:
+        raise Http404
+
+    viewpoint = _relationship_viewpoint(
+        request,
+        obj.organization,
+        obj.counterparty,
+    )
+    relationship_url, other_party = _relationship_url(
+        viewpoint,
+        obj.organization,
+        obj.counterparty,
+    )
+
+    file_exists = bool(
+        obj.main_file
+        and obj.main_file.name
+        and default_storage.exists(obj.main_file.name)
+    )
+    kind = _preview_kind(obj.main_file) if file_exists else "none"
+    extension = Path(obj.main_file.name).suffix.lower().lstrip(".")
+    filename = Path(obj.main_file.name).name
+
+    return render(request, "inventory/documents/contract_file_detail.html", {
+        "object": obj,
+        "viewpoint": viewpoint,
+        "other_party": other_party,
+        "relationship_url": relationship_url,
+        "preview_kind": kind,
+        "preview_available": kind in {"pdf", "image"},
+        "preview_label": _preview_label(kind, extension),
+        "file_extension": extension,
+        "filename": filename,
+    })
+
+
+@login_required
+@xframe_options_sameorigin
+def contract_file_preview(request, pk):
+    obj = get_object_or_404(Contract, pk=pk)
+    if _preview_kind(obj.main_file) not in {"pdf", "image"}:
+        raise Http404
+    return _storage_file_response(
+        obj.main_file,
+        "inline",
+        Path(obj.main_file.name).name,
+    )
+
+
+@login_required
+def contract_file_download(request, pk):
+    obj = get_object_or_404(Contract, pk=pk)
+    if not obj.main_file:
+        raise Http404
+    return _storage_file_response(
+        obj.main_file,
+        "attachment",
+        Path(obj.main_file.name).name,
+    )
 
 
 @login_required

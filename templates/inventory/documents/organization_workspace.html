@@ -165,7 +165,7 @@
             </div>
 
             {% if group.contract.main_file %}
-              <a class="relationship-doc-row main-contract-file" href="{{ group.contract.main_file.url }}">
+              <a class="relationship-doc-row main-contract-file" href="{% url 'contract_file_view' group.contract.pk %}?view={{ organization.pk }}">
                 <span class="relationship-doc-icon">Д</span>
                 <span><b>Основной файл договора</b><small>{{ group.contract }}</small></span>
                 <span>Открыть</span>
@@ -173,7 +173,7 @@
             {% endif %}
 
             {% for item in group.documents %}
-              <a class="relationship-doc-row" href="{{ item.get_absolute_url }}">
+              <a class="relationship-doc-row" href="{{ item.get_absolute_url }}?view={{ organization.pk }}">
                 <span class="relationship-doc-icon">{{ item.document_type.name|slice:":1"|default:"Д" }}</span>
                 <span><b>{{ item.display_title }}</b><small>{{ item.document_type|default:"Документ" }} · {{ item.original_name }}</small></span>
                 <span>{{ item.document_date|date:"d.m.Y"|default:"—" }}</span>
@@ -202,6 +202,11 @@
                 <span class="relationship-operation-main">
                   <b>{{ operation.object.title }}</b>
                   <small>{{ operation.document_count }} документов{% if operation.object.amount %} · {{ operation.object.amount }} ₽{% endif %}</small>
+                  {% if operation.documents %}
+                    <small class="operation-document-preview">
+                      {% for document in operation.documents|slice:":3" %}{{ document.display_title }}{% if not forloop.last %} · {% endif %}{% endfor %}
+                    </small>
+                  {% endif %}
                 </span>
                 <span class="relationship-operation-open">→</span>
               </a>
@@ -239,7 +244,7 @@
     {% endfor %}
 
     {% for item in no_contract_documents %}
-      <a class="relationship-doc-row standalone" href="{{ item.get_absolute_url }}">
+      <a class="relationship-doc-row standalone" href="{{ item.get_absolute_url }}?view={{ organization.pk }}">
         <span class="relationship-doc-icon">{{ item.document_type.name|slice:":1"|default:"Д" }}</span>
         <span><b>{{ item.display_title }}</b><small>{{ item.document_type|default:"Документ" }} · вне операции</small></span>
         <span>{{ item.document_date|date:"d.m.Y"|default:"—" }}</span>
