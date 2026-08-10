@@ -106,6 +106,197 @@ def _reminders_for_organization(organization):
     ).distinct()
 
 
+
+def _operations_for_organization(organization):
+    linked_counterparties = _counterparty_ids_for_organization(organization)
+    return DocumentOperation.objects.filter(
+        Q(organization=organization) | Q(counterparty_id__in=linked_counterparties)
+    ).distinct()
+
+
+@login_required
+def operation_detail(request, pk):
+    obj = get_object_or_404(
+        DocumentOperation.objects.select_related(
+            "organization", "counterparty", "contract", "location", "created_by"
+        ),
+        pk=pk,
+    )
+    documents = list(
+        obj.documents.filter(trashed_at__isnull=True)
+        .select_related("document_type", "organization", "counterparty", "contract")
+        .order_by("document_date", "pk")
+    )
+    return render(
+        request,
+        "inventory/documents/operation_detail.html",
+        {"object": obj, "documents": documents},
+    )
+
+
+@login_required
+def operation_form(request, pk=None):
+    obj = get_object_or_404(DocumentOperation, pk=pk) if pk else None
+    initial = {}
+
+    if obj is None and request.GET.get("contract"):
+        contract = get_object_or_404(
+            Contract.objects.select_related("organization", "counterparty", "location"),
+            pk=request.GET["contract"],
+            archived=False,
+        )
+        initial.update(
+            {
+                "organization": contract.organization_id,
+                "counterparty": contract.counterparty_id,
+                "contract": contract.pk,
+                "location": contract.location_id,
+                "operation_date": timezone.localdate(),
+            }
+        )
+    elif obj is None and request.GET.get("organization"):
+        organization = get_object_or_404(
+            _organization_queryset(),
+            pk=request.GET["organization"],
+        )
+        initial.update(
+            {
+                "organization": organization.pk,
+                "operation_date": timezone.localdate(),
+            }
+        )
+
+    form = DocumentOperationForm(
+        request.POST or None,
+        instance=obj,
+        initial=initial,
+    )
+    if form.is_valid():
+        saved = form.save(commit=False)
+        if saved.pk is None:
+            saved.created_by = request.user
+        saved.save()
+        messages.success(request, "Операция сохранена.")
+        return redirect(saved)
+
+    if obj:
+        cancel_url = obj.get_absolute_url()
+    elif initial.get("contract"):
+        cancel_url = reverse("contract_detail", args=[initial["contract"]])
+    elif initial.get("organization"):
+        cancel_url = reverse(
+            "organization_document_workspace",
+            args=[initial["organization"]],
+        )
+    else:
+        cancel_url = reverse("document_center")
+
+    return render(
+        request,
+        "inventory/documents/operation_form.html",
+        {
+            "form": form,
+            "title": "Изменить операцию" if obj else "Новая операция",
+            "cancel_url": cancel_url,
+            "selected_documents": [],
+        },
+    )
+
+
+@login_required
+@require_POST
+def operation_from_documents(request):
+    ids = []
+    for value in request.POST.getlist("selected_documents"):
+        try:
+            ids.append(int(value))
+        except (TypeError, ValueError):
+            continue
+
+    documents = list(
+        DocumentRecord.objects.filter(
+            pk__in=ids,
+            trashed_at__isnull=True,
+        )
+        .select_related(
+            "organization",
+            "counterparty",
+            "contract",
+            "location",
+            "document_type",
+        )
+        .order_by("pk")
+    )
+
+    if not documents:
+        messages.error(request, "Выберите хотя бы один документ.")
+        return redirect("document_list")
+
+    first = documents[0]
+    incompatible = [
+        item
+        for item in documents
+        if item.organization_id != first.organization_id
+        or item.counterparty_id != first.counterparty_id
+        or item.contract_id != first.contract_id
+    ]
+    if incompatible:
+        messages.error(
+            request,
+            "В одну операцию можно объединить документы одной организации, контрагента и договора.",
+        )
+        return redirect("document_list")
+
+    operation_date = first.document_date or timezone.localdate()
+    initial = {
+        "organization": first.organization_id,
+        "counterparty": first.counterparty_id,
+        "contract": first.contract_id,
+        "location": first.location_id,
+        "operation_date": operation_date,
+    }
+
+    if first.contract_id and first.contract.category == Contract.Category.SUPPLY:
+        initial["title"] = f"Поставка от {operation_date:%d.%m.%Y}"
+    elif first.contract_id:
+        initial["title"] = f"Операция — {first.contract.title}"
+    else:
+        initial["title"] = f"Операция от {operation_date:%d.%m.%Y}"
+
+    has_operation_fields = bool(request.POST.get("title"))
+    form = DocumentOperationForm(
+        request.POST if has_operation_fields else None,
+        initial=initial,
+    )
+
+    if has_operation_fields and form.is_valid():
+        with transaction.atomic():
+            operation = form.save(commit=False)
+            operation.created_by = request.user
+            operation.save()
+
+            for document in documents:
+                document.operation = operation
+                document.save()
+
+        messages.success(
+            request,
+            f"Создана операция. Документов в пакете: {len(documents)}.",
+        )
+        return redirect(operation)
+
+    return render(
+        request,
+        "inventory/documents/operation_form.html",
+        {
+            "form": form,
+            "title": "Создать операцию из документов",
+            "cancel_url": reverse("document_list"),
+            "selected_documents": documents,
+        },
+    )
+
+
 @login_required
 def organization_document_workspace(request, pk):
     organization = get_object_or_404(_organization_queryset(), pk=pk)
