@@ -9,6 +9,7 @@ urlpatterns = [
     path("account/", account_view, name="account"),
     path("control/", views.control_center, name="control_center"),
     path("documents/", documents_views.document_center, name="document_center"),
+    path("documents/organization/<int:pk>/", documents_views.organization_document_workspace, name="organization_document_workspace"),
     path("documents/all/", documents_views.document_list, name="document_list"),
     path("documents/inbox/", documents_views.document_inbox, name="document_inbox"),
     path("documents/upload/", documents_views.document_upload, name="document_upload"),

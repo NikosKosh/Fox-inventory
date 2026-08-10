@@ -317,3 +317,42 @@ a{color:inherit}
 @media(max-width:760px){.form-grid{grid-template-columns:1fr}.field-wide{grid-column:auto}.contract-grid{grid-template-columns:1fr}.document-stats{grid-template-columns:repeat(2,minmax(0,1fr))}.reminder-row{grid-template-columns:48px minmax(0,1fr)}.reminder-actions{grid-column:2}.document-filters{display:grid;grid-template-columns:1fr}.document-filters .input,.document-org-filter .input{width:100%}}
 .file-drop-zone{padding:14px;border:1px dashed #3b4d65;border-radius:11px;background:#0e1622;transition:border-color .15s ease,background .15s ease}.file-drop-zone.dragover{border-color:#ff9145;background:#171e27}.file-drop-zone.has-files{border-color:#3f6b58;background:#11251e}
 .document-period{padding-top:6px}.document-period+.document-period{margin-top:16px;border-top:1px solid var(--line)}.document-period h3{margin:8px 0;color:#dce5ef;font-size:13px;text-transform:capitalize}.doc-date-col{width:110px;white-space:nowrap}.doc-type-col{width:180px}
+
+/* FOX Inventory 1.2.1 — organization-centric document workspace */
+.organization-document-selector{margin-bottom:18px}
+.organization-document-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px}
+.organization-document-card{display:flex;align-items:center;gap:12px;padding:16px;border:1px solid var(--border);border-radius:16px;background:var(--surface-2);color:inherit;text-decoration:none;transition:.16s ease}
+.organization-document-card:hover{border-color:var(--accent);transform:translateY(-1px)}
+.organization-document-card>span:nth-child(2){display:flex;flex-direction:column;min-width:0;flex:1}
+.organization-document-card small{color:var(--muted);margin-top:3px}
+.organization-document-icon{width:42px;height:42px;border-radius:13px;display:grid;place-items:center;background:var(--accent-soft);color:var(--accent);font-weight:800;font-size:12px}
+.organization-document-open{font-size:20px;color:var(--muted)}
+.document-context-bar{display:flex;align-items:center;gap:10px;margin:-4px 0 18px;padding:10px 12px;border:1px solid var(--border);border-radius:14px;background:var(--surface-2)}
+.document-context-bar>span{font-size:12px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.05em}
+.document-context-bar .input{max-width:360px}
+.party-contract-grid{display:grid;gap:10px}
+.party-contract-card{display:grid;grid-template-columns:minmax(260px,1.4fr) minmax(180px,1fr) auto;gap:16px;align-items:center;padding:14px 16px;border:1px solid var(--border);border-radius:14px;color:inherit;text-decoration:none;background:var(--surface-2)}
+.party-contract-card:hover{border-color:var(--accent)}
+.party-contract-sides{display:flex;align-items:center;gap:8px;min-width:0}
+.party-side{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--muted)}
+.party-side.active{color:var(--text);font-weight:700}
+.party-arrow{color:var(--accent);font-weight:800}
+.party-contract-title{display:flex;flex-direction:column;gap:3px}
+.party-contract-title small,.party-contract-meta{color:var(--muted)}
+.party-contract-meta{display:flex;align-items:center;gap:10px;white-space:nowrap}
+.contract-parties-card{margin-bottom:16px}
+.contract-parties{display:grid;grid-template-columns:1fr 44px 1fr;align-items:stretch;gap:10px;margin-top:10px}
+.contract-party{display:flex;flex-direction:column;gap:7px;padding:18px;border:1px solid var(--border);border-radius:16px;background:var(--surface-2);color:inherit;text-decoration:none}
+.contract-party.primary{border-color:color-mix(in srgb,var(--accent) 38%,var(--border))}
+.contract-party small,.contract-party span{color:var(--muted)}
+.contract-party b{font-size:17px}
+.contract-party-link{display:grid;place-items:center;color:var(--accent);font-size:22px;font-weight:800}
+.contract-list-parties{display:flex;align-items:center;gap:8px;margin:10px 0;color:var(--muted);font-size:13px}
+.contract-list-parties b{color:var(--accent)}
+@media(max-width:800px){
+  .party-contract-card{grid-template-columns:1fr}
+  .contract-parties{grid-template-columns:1fr}
+  .contract-party-link{height:24px}
+  .document-context-bar{align-items:stretch;flex-direction:column}
+  .document-context-bar .input{max-width:none;width:100%}
+}

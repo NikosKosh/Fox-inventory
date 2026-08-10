@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.2.1 — 2026-08-10
+
+- Document Center is now organization-centric: each organization has its own workspace.
+- Contracts are visible from either internal party when a counterparty corresponds to an organization.
+- Contract cards and details show both parties explicitly.
+- Added FOX-IT SHOP as an organization workspace without duplicating existing contracts or documents.
+- Organization filters for contracts, documents and reminders include records where the organization is the second party.
+
 ## 1.2.0 — 2026-08-07
 
 - Добавлен встроенный раздел «Документы» для хранения и классификации файлов по организациям.

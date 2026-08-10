@@ -53,6 +53,92 @@ def _selected_organization(request):
         return None
 
 
+
+def _party_key(value):
+    return "".join(ch for ch in (value or "").casefold() if ch.isalnum())
+
+
+def _counterparty_ids_for_organization(organization):
+    keys = {_party_key(organization.name), _party_key(organization.short_name)}
+    keys.discard("")
+    return [
+        item.pk
+        for item in Counterparty.objects.filter(archived=False).only("pk", "name", "short_name")
+        if _party_key(item.name) in keys or _party_key(item.short_name) in keys
+    ]
+
+
+def _organization_for_counterparty(counterparty):
+    if counterparty is None:
+        return None
+    keys = {_party_key(counterparty.name), _party_key(counterparty.short_name)}
+    keys.discard("")
+    for organization in _organization_queryset().only("pk", "name", "short_name", "prefix"):
+        if _party_key(organization.name) in keys or _party_key(organization.short_name) in keys:
+            return organization
+    return None
+
+
+def _contracts_for_organization(organization, archived=False):
+    linked_counterparties = _counterparty_ids_for_organization(organization)
+    return Contract.objects.filter(archived=archived).filter(
+        Q(organization=organization) | Q(counterparty_id__in=linked_counterparties)
+    ).distinct()
+
+
+def _documents_for_organization(organization):
+    linked_counterparties = _counterparty_ids_for_organization(organization)
+    return DocumentRecord.objects.filter(trashed_at__isnull=True).filter(
+        Q(organization=organization)
+        | Q(counterparty_id__in=linked_counterparties)
+        | Q(contract__counterparty_id__in=linked_counterparties)
+    ).distinct()
+
+
+def _reminders_for_organization(organization):
+    linked_counterparties = _counterparty_ids_for_organization(organization)
+    return Reminder.objects.filter(active=True).filter(
+        Q(organization=organization)
+        | Q(counterparty_id__in=linked_counterparties)
+        | Q(contract__counterparty_id__in=linked_counterparties)
+    ).distinct()
+
+
+@login_required
+def organization_document_workspace(request, pk):
+    organization = get_object_or_404(_organization_queryset(), pk=pk)
+    contracts = _contracts_for_organization(organization).select_related(
+        "organization", "counterparty", "location", "responsible_employee"
+    ).annotate(
+        document_count=Count("documents", filter=Q(documents__trashed_at__isnull=True), distinct=True),
+        reminder_count=Count("reminders", filter=Q(reminders__active=True), distinct=True),
+    )
+    documents = _documents_for_organization(organization).select_related(
+        "organization", "document_type", "counterparty", "contract", "location"
+    )
+    reminders = _reminders_for_organization(organization).select_related(
+        "organization", "counterparty", "contract", "location"
+    )
+    linked_counterparties = _counterparty_ids_for_organization(organization)
+    related_counterparties = Counterparty.objects.filter(
+        Q(contracts__in=contracts) | Q(documents__in=documents)
+    ).distinct()
+
+    return render(request, "inventory/documents/organization_workspace.html", {
+        "organization": organization,
+        "organizations": _organization_queryset(),
+        "contracts": contracts[:50],
+        "contracts_total": contracts.count(),
+        "documents_total": documents.count(),
+        "counterparties_total": related_counterparties.count(),
+        "reminders_total": reminders.count(),
+        "recent_documents": documents.order_by("-document_date", "-created_at", "-pk")[:12],
+        "unlinked_documents": documents.filter(contract__isnull=True).order_by("-document_date", "-created_at")[:12],
+        "reminder_rows": reminder_rows(reminders.order_by("next_due_date", "pk")[:8]),
+        "linked_counterparty_ids": linked_counterparties,
+    })
+
+
 def _paginate(request, queryset, per_page=50):
     paginator = Paginator(queryset, per_page)
     page_obj = paginator.get_page(request.GET.get("page"))

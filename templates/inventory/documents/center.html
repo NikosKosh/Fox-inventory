@@ -2,41 +2,58 @@
 {% block title %}Документы — FOX Inventory{% endblock %}
 {% block content %}
 <div class="page-head document-head">
-  <div><span class="eyebrow">Документы</span><h1>Документы и договоры</h1><p class="muted">Хранение и классификация документов по организациям, контрагентам и объектам.</p></div>
+  <div><span class="eyebrow">Документы</span><h1>Документы и договоры</h1><p class="muted">Сначала выберите организацию — внутри будет показан её полный контур договоров и документов.</p></div>
   <div class="actions"><a class="btn" href="{% url 'contract_add' %}">+ Договор</a><a class="btn primary" href="{% url 'document_upload' %}">+ Загрузить</a></div>
 </div>
 {% include "inventory/documents/_nav.html" %}
-<form class="filters auto-filter document-org-filter" method="get">
-  <select class="input" name="organization"><option value="">Все организации</option>{% for org in organizations %}<option value="{{ org.pk }}" {% if selected_organization and selected_organization.pk == org.pk %}selected{% endif %}>{{ org }}</option>{% endfor %}</select>
-  {% if selected_organization %}<a class="btn" href="{% url 'document_center' %}">Сбросить</a>{% endif %}
-</form>
+
+<section class="card organization-document-selector">
+  <div class="section-head"><div><h2>Организации</h2><p class="muted">Откройте организацию, чтобы работать с документами именно от её стороны.</p></div><a href="{% url 'organization_list' %}">Справочник</a></div>
+  <div class="organization-document-grid">
+    {% for org in organizations %}
+      <a class="organization-document-card" href="{% url 'organization_document_workspace' org.pk %}">
+        <span class="organization-document-icon">{{ org.prefix|slice:":2" }}</span>
+        <span><b>{{ org }}</b><small>{{ org.prefix }} · открыть документы</small></span>
+        <span class="organization-document-open">→</span>
+      </a>
+    {% empty %}<p class="muted">Организации не добавлены.</p>{% endfor %}
+  </div>
+</section>
+
 <div class="stats document-stats">
-  <a class="stat" href="{% url 'document_list' %}{% if selected_organization %}?organization={{ selected_organization.pk }}{% endif %}"><b>{{ documents_total }}</b><span>документов</span></a>
-  <a class="stat" href="{% url 'contract_list' %}{% if selected_organization %}?organization={{ selected_organization.pk }}{% endif %}"><b>{{ contracts_total }}</b><span>договоров</span></a>
+  <a class="stat" href="{% url 'document_list' %}"><b>{{ documents_total }}</b><span>документов</span></a>
+  <a class="stat" href="{% url 'contract_list' %}"><b>{{ contracts_total }}</b><span>договоров</span></a>
   <a class="stat" href="{% url 'counterparty_list' %}"><b>{{ counterparties_total }}</b><span>контрагентов</span></a>
   <a class="stat {% if inbox_total %}attention{% endif %}" href="{% url 'document_inbox' %}"><b>{{ inbox_total }}</b><span>неразобранных</span></a>
   <a class="stat" href="{% url 'reminder_list' %}"><b>{{ reminders_total }}</b><span>напоминаний</span></a>
 </div>
+
 <div class="grid two document-center-grid">
   <section class="card">
     <div class="section-head"><div><h2>Ближайшее</h2><p class="muted">Только созданные вами напоминания.</p></div><a href="{% url 'reminder_add' %}">+ Добавить</a></div>
     {% for row in reminder_rows %}
       <div class="reminder-row {{ row.state }}">
         <div class="reminder-date"><b>{{ row.due|date:"d" }}</b><span>{{ row.due|date:"M" }}</span></div>
-        <div class="reminder-main"><b>{{ row.reminder.title }}</b><small>{% if row.reminder.organization %}{{ row.reminder.organization }}{% endif %}{% if row.reminder.counterparty %} · {{ row.reminder.counterparty }}{% endif %}{% if row.reminder.location %} · {{ row.reminder.location.label|default:row.reminder.location.address }}{% endif %}</small></div>
+        <div class="reminder-main"><b>{{ row.reminder.title }}</b><small>{% if row.reminder.organization %}{{ row.reminder.organization }}{% endif %}{% if row.reminder.counterparty %} · {{ row.reminder.counterparty }}{% endif %}</small></div>
         <div class="reminder-actions"><form method="post" action="{% url 'reminder_done' row.reminder.pk %}">{% csrf_token %}<input type="hidden" name="next" value="{{ request.get_full_path }}"><button class="text-button" type="submit">Готово</button></form></div>
       </div>
     {% empty %}<p class="muted">Ближайших напоминаний нет.</p>{% endfor %}
   </section>
   <section class="card">
-    <div class="section-head"><div><h2>Договоры</h2><p class="muted">Последние действующие карточки.</p></div><a href="{% url 'contract_list' %}">Все</a></div>
-    {% for contract in recent_contracts %}<a class="row-link" href="{{ contract.get_absolute_url }}"><span><b>{{ contract.title }}</b><small>{{ contract.organization }} · {{ contract.counterparty }}</small></span><small>{{ contract.status_label }}</small></a>{% empty %}<p class="muted">Договоров пока нет.</p>{% endfor %}
+    <div class="section-head"><div><h2>Последние договоры</h2><p class="muted">Обе стороны договора видны сразу.</p></div><a href="{% url 'contract_list' %}">Все</a></div>
+    {% for contract in recent_contracts %}
+      <a class="row-link" href="{{ contract.get_absolute_url }}">
+        <span><b>{{ contract.title }}</b><small>{{ contract.organization }} ↔ {{ contract.counterparty }}</small></span>
+        <small>{{ contract.status_label }}</small>
+      </a>
+    {% empty %}<p class="muted">Договоров пока нет.</p>{% endfor %}
   </section>
 </div>
+
 <section class="card">
-  <div class="section-head"><div><h2>Последние документы</h2><p class="muted">Недавно добавленные файлы.</p></div><a href="{% url 'document_list' %}">Все документы</a></div>
-  <div class="table-wrap"><table class="dense-table"><thead><tr><th>Дата</th><th>Документ</th><th>Организация</th><th>Контрагент</th><th>Договор</th><th class="numeric-col">Сумма</th></tr></thead><tbody>
-  {% for item in recent_documents %}<tr><td>{{ item.document_date|date:"d.m.Y"|default:"—" }}</td><td><a href="{{ item.get_absolute_url }}"><b>{{ item.display_title }}</b></a><small>{{ item.original_name }}</small></td><td><span class="org-chip">{{ item.organization }}</span></td><td>{{ item.counterparty|default:"—" }}</td><td>{% if item.contract %}<a href="{{ item.contract.get_absolute_url }}">{{ item.contract.title }}</a>{% else %}—{% endif %}</td><td class="numeric-col">{% if item.amount %}{{ item.amount }} ₽{% else %}—{% endif %}</td></tr>{% empty %}<tr><td colspan="6">Документы ещё не загружены.</td></tr>{% endfor %}
+  <div class="section-head"><div><h2>Последние документы</h2><p class="muted">Недавно добавленные файлы по всем организациям.</p></div><a href="{% url 'document_list' %}">Все документы</a></div>
+  <div class="table-wrap"><table class="dense-table"><thead><tr><th>Дата</th><th>Документ</th><th>Организация</th><th>Контрагент</th><th>Договор</th></tr></thead><tbody>
+  {% for item in recent_documents %}<tr><td>{{ item.document_date|date:"d.m.Y"|default:"—" }}</td><td><a href="{{ item.get_absolute_url }}"><b>{{ item.display_title }}</b></a><small>{{ item.original_name }}</small></td><td><span class="org-chip">{{ item.organization }}</span></td><td>{{ item.counterparty|default:"—" }}</td><td>{% if item.contract %}<a href="{{ item.contract.get_absolute_url }}">{{ item.contract.title }}</a>{% else %}—{% endif %}</td></tr>{% empty %}<tr><td colspan="5">Документы ещё не загружены.</td></tr>{% endfor %}
   </tbody></table></div>
 </section>
 {% endblock %}
