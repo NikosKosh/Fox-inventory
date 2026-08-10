@@ -671,6 +671,7 @@ class DocumentRecord(TimeStampedModel):
             models.Index(fields=["organization", "trashed_at"], name="inventory_d_organiz_21a46e_idx"),
             models.Index(fields=["counterparty", "trashed_at"], name="inventory_d_counter_9f6952_idx"),
             models.Index(fields=["contract", "trashed_at"], name="inv_doc_contract_trash_idx"),
+            models.Index(fields=["operation", "trashed_at"], name="inv_doc_operation_trash_idx"),
         ]
 
     def __str__(self):
