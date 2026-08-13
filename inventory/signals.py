@@ -28,15 +28,12 @@ def create_default_categories(sender, **kwargs):
     for name, code, mode in DEFAULT_CATEGORIES:
         Category.objects.get_or_create(name=name, defaults={"code": code, "tracking_mode": mode})
 
-
 @receiver(post_delete, sender=Act)
 def delete_act_document_after_commit(sender, instance, **kwargs):
     document_name = instance.document.name if instance.document else ""
     if not document_name:
         return
-
     def remove_document():
         if default_storage.exists(document_name):
             default_storage.delete(document_name)
-
     transaction.on_commit(remove_document)

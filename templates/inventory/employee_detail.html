@@ -8,13 +8,18 @@
   </div>
   <div class="actions">
     {% if not object.archived %}
-      <a class="btn primary" href="{% url 'employee_assign_without_act' object.pk %}">Добавить оборудование</a>
-      <a class="btn" href="{% url 'employee_issue_equipment' object.pk %}">Выдать сразу с актом</a>
-      {% if equipment_without_act_count %}<a class="btn" href="{% url 'employee_generate_act' object.pk 'issue' %}">Оформить акт · {{ equipment_without_act_count }}</a>{% endif %}
-      {% if equipment %}<a class="btn" href="{% url 'employee_return_equipment' object.pk %}">Забрать оборудование</a>{% endif %}
+      <a class="btn primary" href="{% url 'employee_assign_without_act' object.pk %}">+ Оборудование</a>
+      {% if equipment %}<a class="btn" href="{% url 'employee_return_equipment' object.pk %}">Забрать</a>{% endif %}
     {% endif %}
-    <a class="btn" href="{% url 'employee_edit' object.pk %}">Изменить</a>
-    <form method="post" action="{% url 'employee_archive' object.pk %}">{% csrf_token %}<button class="btn" type="submit">{% if object.archived %}Вернуть из архива{% else %}В архив{% endif %}</button></form>
+    <details class="action-menu">
+      <summary class="btn">Ещё</summary>
+      <div class="action-menu-popover">
+        {% if not object.archived %}<a href="{% url 'employee_issue_equipment' object.pk %}">Выдать с актом</a>{% endif %}
+        {% if equipment_without_act_count %}<a href="{% url 'employee_generate_act' object.pk 'issue' %}">Оформить акт · {{ equipment_without_act_count }}</a>{% endif %}
+        <a href="{% url 'employee_edit' object.pk %}">Изменить сотрудника</a>
+        <form method="post" action="{% url 'employee_archive' object.pk %}">{% csrf_token %}<button type="submit">{% if object.archived %}Вернуть из архива{% else %}В архив{% endif %}</button></form>
+      </div>
+    </details>
   </div>
 </div>
 

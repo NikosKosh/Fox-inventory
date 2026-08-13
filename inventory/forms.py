@@ -27,7 +27,6 @@ class AccountPasswordChangeForm(PasswordChangeForm):
             })
 
 
-
 class StyledModelForm(forms.ModelForm):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -59,7 +58,7 @@ class EmployeeForm(StyledModelForm):
         model = Employee
         fields = [
             "full_name", "position", "department", "workplace_location", "room",
-            "phone", "organization", "archived", "notes",
+            "phone", "organization", "notes",
         ]
 
     def __init__(self, *args, **kwargs):
@@ -148,10 +147,9 @@ class EquipmentForm(StyledModelForm):
         fields = [
             "category", "accounting_group", "internal_code", "name", "manufacturer", "model", "serial_number", "mac_address", "hostname",
             "owner", "responsible_employee", "location", "room", "cabinet", "freeform_location", "quantity",
-            "usage_status", "condition", "notes", "network_address", "network_username", "archived",
+            "usage_status", "condition", "notes", "network_address", "network_username",
         ]
         widgets = {"notes": forms.Textarea(attrs={"rows": 4})}
-
 
     def clean_mac_address(self):
         return normalize_mac_address(self.cleaned_data.get("mac_address", ""))
@@ -177,6 +175,18 @@ class EquipmentForm(StyledModelForm):
         category = data.get("category")
         if category and category.tracking_mode == Category.TrackingMode.UNIT:
             data["quantity"] = 1
+        if (
+            data.get("condition") == Equipment.Condition.BROKEN
+            and data.get("usage_status") not in {
+                Equipment.UsageStatus.REPAIR,
+                Equipment.UsageStatus.WAITING_DISPOSAL,
+                Equipment.UsageStatus.DISPOSED,
+            }
+        ):
+            self.add_error(
+                "usage_status",
+                "Для сломанного оборудования выберите ремонт, ожидание списания или списание.",
+            )
         return data
 
     def save(self, commit=True):
@@ -279,23 +289,11 @@ class RepairForm(StyledModelForm):
 def _act_defaults_for_employee(employee, operation):
     organization = employee.organization
     if operation == "return":
-        position = (
-            organization.act_return_representative_position
-            or settings.ACT_RETURN_REPRESENTATIVE_POSITION
-        )
-        name = (
-            organization.act_return_representative_name
-            or settings.ACT_RETURN_REPRESENTATIVE_NAME
-        )
+        position = organization.act_return_representative_position or settings.ACT_RETURN_REPRESENTATIVE_POSITION
+        name = organization.act_return_representative_name or settings.ACT_RETURN_REPRESENTATIVE_NAME
     else:
-        position = (
-            organization.act_issue_representative_position
-            or settings.ACT_ISSUE_REPRESENTATIVE_POSITION
-        )
-        name = (
-            organization.act_issue_representative_name
-            or settings.ACT_ISSUE_REPRESENTATIVE_NAME
-        )
+        position = organization.act_issue_representative_position or settings.ACT_ISSUE_REPRESENTATIVE_POSITION
+        name = organization.act_issue_representative_name or settings.ACT_ISSUE_REPRESENTATIVE_NAME
     return {
         "city": organization.act_city or settings.ACT_DEFAULT_CITY,
         "organization_name": organization.act_organization_name or organization.name,

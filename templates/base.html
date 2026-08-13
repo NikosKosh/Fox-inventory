@@ -20,6 +20,9 @@
       <span class="brand-copy"><strong>FOX</strong><span>Inventory</span></span>
     </a>
 
+    <a class="mobile-search-button" href="{% url 'global_search' %}" aria-label="Поиск" title="Поиск">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m21 21-4.4-4.4m2.4-5.1a7.5 7.5 0 1 1-15 0 7.5 7.5 0 0 1 15 0Z"/></svg>
+    </a>
     <button class="mobile-nav-toggle" type="button" aria-label="Открыть меню" data-mobile-nav>
       <span></span><span></span><span></span>
     </button>
@@ -82,6 +85,9 @@ document.addEventListener("DOMContentLoaded", function () {
     form.querySelectorAll("select").forEach(function (field) {
       field.addEventListener("change", function () { form.requestSubmit(); });
     });
+    form.querySelectorAll('input[type="checkbox"]').forEach(function (field) {
+      field.addEventListener("change", function () { form.requestSubmit(); });
+    });
     form.querySelectorAll('input[type="search"], input[data-search-field]').forEach(function (field) {
       field.addEventListener("keydown", function (event) {
         if (event.key === "Enter") { event.preventDefault(); form.requestSubmit(); }
@@ -102,7 +108,10 @@ document.addEventListener("DOMContentLoaded", function () {
   const drawer = document.querySelector('[data-preview-drawer]');
   const backdrop = document.querySelector('[data-preview-backdrop]');
   const body = document.querySelector('[data-preview-body]');
+  let previewController = null;
   function closePreview() {
+    previewController?.abort();
+    previewController = null;
     drawer.classList.remove('open');
     drawer.setAttribute('aria-hidden','true');
     backdrop.hidden = true;
@@ -116,12 +125,14 @@ document.addEventListener("DOMContentLoaded", function () {
     drawer.classList.add('open');
     drawer.setAttribute('aria-hidden','false');
     body.innerHTML = '<div class="preview-loading">Загрузка…</div>';
+    previewController?.abort();
+    previewController = new AbortController();
     try {
-      const response = await fetch(trigger.dataset.equipmentPreview, {headers:{'X-Requested-With':'XMLHttpRequest'}});
+      const response = await fetch(trigger.dataset.equipmentPreview, {headers:{'X-Requested-With':'XMLHttpRequest'}, signal:previewController.signal});
       if (!response.ok) throw new Error();
       body.innerHTML = await response.text();
     } catch (e) {
-      body.innerHTML = '<div class="preview-error">Не удалось загрузить карточку.</div>';
+      if (e.name !== 'AbortError') body.innerHTML = '<div class="preview-error">Не удалось загрузить карточку.</div>';
     }
   });
   document.querySelector('[data-preview-close]')?.addEventListener('click', closePreview);

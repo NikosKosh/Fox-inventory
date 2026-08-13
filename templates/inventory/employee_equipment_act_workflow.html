@@ -38,16 +38,16 @@
   </div>
 
   <div class="selection-toolbar">
-    <input id="equipment-filter" class="input grow" type="search" placeholder="Поиск по коду, названию, модели, SN, MAC или IP">
+    <input id="equipment-filter" class="input grow" type="search" placeholder="Поиск по коду, названию, модели или серийному номеру">
     <span class="muted">Выбрано: <b id="selected-count">0</b></span>
   </div>
 
   <div class="equipment-picker compact-picker">
     {% for item in form.fields.equipment.queryset %}
-      <label class="equipment-choice" data-search="{{ item.internal_code }} {{ item.name }} {{ item.manufacturer }} {{ item.model }} {{ item.serial_number }} {{ item.mac_address }} {{ item.network_address }} {{ item.owner }}">
+      <label class="equipment-choice" data-search="{{ item.internal_code }} {{ item.name }} {{ item.manufacturer }} {{ item.model }} {{ item.serial_number }} {{ item.owner }}">
         <input type="checkbox" name="equipment" value="{{ item.pk }}" {% if item.pk|stringformat:'s' in selected_equipment_ids %}checked{% endif %}>
         <span class="choice-code">{{ item.internal_code|default:"без кода" }}</span>
-        <span class="choice-main"><b>{{ item.name }}</b><small>{{ item.manufacturer }} {{ item.model }}{% if item.serial_number %} · SN: {{ item.serial_number }}{% endif %}{% if item.mac_address %} · MAC: {{ item.mac_address }}{% endif %}</small></span>
+        <span class="choice-main"><b>{{ item.name }}</b><small>{{ item.manufacturer }} {{ item.model }}{% if item.serial_number %} · SN: {{ item.serial_number }}{% endif %}</small></span>
         <span class="choice-owner">{{ item.owner }}</span>
       </label>
     {% empty %}

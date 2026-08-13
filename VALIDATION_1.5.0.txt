@@ -1,0 +1,20 @@
+FOX Inventory 1.5.0 validation
+Date: 2026-08-12
+Base: canonical FOX Inventory 1.4.1 (Git commit fd5dc29892206a75a183ca8ec3c0ca4b91ae2a20), reconstructed from handoff/update artifacts and checked against canonical Git blobs for key application files before 1.5.0 changes.
+
+Offline checks completed:
+- Python AST/compile: 57 source files OK
+- Template control-block balance: OK
+- Literal Django template URL names: OK
+- Migration chain: 0001 through 0016 contiguous
+- 0016 matches EquipmentLoan.previous_state model change
+- Release safety guards present: network password staff-only; archive safeguards; loan state restore
+- CSS brace structure: OK
+- templates/base.html inline JavaScript: node --check OK
+
+Not executed in the artifact-building environment:
+- Django manage.py check
+- makemigrations --check --dry-run
+- Django test suite
+Reason: the artifact-building environment does not contain Django/Docker and has no package-network access.
+The repository CI workflow runs these checks after push.

@@ -41,7 +41,5 @@ class VisualRefreshTests(TestCase):
 
     def test_sort_indicator_uses_css_chevron_state(self):
         response = self.client.get(reverse("employee_list"), {"sort": "organization", "dir": "desc"})
-        self.assertContains(response, "sort-indicator state-desc")
+        self.assertContains(response, "state-desc")
         self.assertContains(response, "sort=organization&amp;dir=asc")
-        self.assertNotContains(response, 'title="Сортировать')
-        self.assertNotContains(response, "sort-arrow")

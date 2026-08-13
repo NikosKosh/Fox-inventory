@@ -107,14 +107,16 @@ def _base_context():
 
 
 def _remember_back_url(request, session_key, default_url):
+    # Back-navigation belongs to the current URL, not to shared session state.
+    # This keeps two open tabs from overwriting each other's return target.
     candidate = request.GET.get("back", "").strip()
     if candidate and url_has_allowed_host_and_scheme(
         candidate,
         allowed_hosts={request.get_host()},
         require_https=request.is_secure(),
     ):
-        request.session[session_key] = candidate
-    return request.session.get(session_key, default_url)
+        return candidate
+    return default_url
 
 
 
@@ -428,6 +430,20 @@ def employee_form(request, pk=None):
 @require_POST
 def employee_archive(request, pk):
     obj = get_object_or_404(Employee, pk=pk)
+    if not obj.archived:
+        assigned = obj.equipment.filter(archived=False).count()
+        active_loans = obj.organization_loans.filter(status=EquipmentLoan.Status.ACTIVE).count()
+        if assigned or active_loans:
+            parts = []
+            if assigned:
+                parts.append(f"закреплено оборудования: {assigned}")
+            if active_loans:
+                parts.append(f"активных временных передач: {active_loans}")
+            messages.error(
+                request,
+                "Нельзя отправить сотрудника в архив: " + ", ".join(parts) + ". Сначала завершите эти операции.",
+            )
+            return redirect("employee_detail", pk=pk)
     obj.archived = not obj.archived
     obj.save(update_fields=["archived", "updated_at"])
     messages.success(request, "Статус сотрудника изменён.")
@@ -1067,11 +1083,13 @@ def equipment_list(request):
 def equipment_detail(request, pk):
     obj = get_object_or_404(Equipment.objects.select_related("category", "owner", "responsible_employee__organization", "location", "room", "cabinet"), pk=pk)
     back_url = _remember_back_url(request, "equipment_list_back_url", reverse("equipment_list"))
+    loans = obj.loans.select_related("borrower", "responsible_employee").all()
     return render(request, "inventory/equipment_detail.html", {
         "object": obj,
         "movements": _visible_movements(obj.movements.select_related("from_employee", "to_employee", "from_organization", "to_organization", "created_by", "act"))[:100],
         "acts": obj.acts.select_related("employee").all(),
-        "loans": obj.loans.select_related("borrower", "responsible_employee").all(),
+        "loans": loans,
+        "active_loan": loans.filter(status=EquipmentLoan.Status.ACTIVE).first(),
         "repairs": obj.repairs.all(),
         "documents": obj.document_records.filter(trashed_at__isnull=True).select_related("document_type", "counterparty", "contract", "organization"),
         "back_url": back_url,
@@ -1111,7 +1129,7 @@ def equipment_form(request, pk=None):
         )
         messages.success(request, "Карточка оборудования сохранена.")
         return redirect(saved)
-    return render(request, "inventory/model_form.html", {"form": form, "title": "Оборудование", "cancel_url": obj.get_absolute_url() if obj else reverse("equipment_list")})
+    return render(request, "inventory/model_form.html", {"form": form, "title": "Оборудование", "form_kind": "equipment", "cancel_url": obj.get_absolute_url() if obj else reverse("equipment_list")})
 
 
 @login_required
@@ -1145,22 +1163,40 @@ def equipment_assign(request, pk):
 @login_required
 def equipment_loan(request, pk):
     obj = get_object_or_404(Equipment, pk=pk)
+    if obj.loans.filter(status=EquipmentLoan.Status.ACTIVE).exists():
+        messages.error(request, "У этого оборудования уже есть активная временная передача.")
+        return redirect(obj)
     form = LoanForm(request.POST or None, request.FILES or None, equipment=obj)
     if form.is_valid():
-        loan = form.save(commit=False)
-        loan.equipment = obj
-        loan.lender = obj.owner
-        loan.save()
-        old_status = obj.usage_status
-        obj.usage_status = Equipment.UsageStatus.LOANED
-        obj.responsible_employee = loan.responsible_employee
-        obj.save()
-        EquipmentMovement.objects.create(
-            equipment=obj, movement_type=EquipmentMovement.MovementType.LOANED,
-            from_organization=obj.owner, to_organization=loan.borrower, to_employee=loan.responsible_employee,
-            from_status=old_status, to_status=obj.usage_status,
-            notes=("Без документов. " if loan.undocumented else "") + loan.notes, created_by=request.user,
-        )
+        with transaction.atomic():
+            old_status = obj.usage_status
+            old_employee = obj.responsible_employee
+            loan = form.save(commit=False)
+            loan.equipment = obj
+            loan.lender = obj.owner
+            loan.previous_state = {
+                "usage_status": obj.usage_status,
+                "responsible_employee_id": obj.responsible_employee_id,
+                "location_id": obj.location_id,
+                "room_id": obj.room_id,
+                "cabinet_id": obj.cabinet_id,
+                "freeform_location": obj.freeform_location,
+            }
+            loan.save()
+            obj.usage_status = Equipment.UsageStatus.LOANED
+            obj.responsible_employee = loan.responsible_employee
+            obj.location = None
+            obj.room = None
+            obj.cabinet = None
+            obj.freeform_location = ""
+            obj.save()
+            EquipmentMovement.objects.create(
+                equipment=obj, movement_type=EquipmentMovement.MovementType.LOANED,
+                from_employee=old_employee, from_organization=obj.owner,
+                to_organization=loan.borrower, to_employee=loan.responsible_employee,
+                from_status=old_status, to_status=obj.usage_status,
+                notes=("Без документов. " if loan.undocumented else "") + loan.notes, created_by=request.user,
+            )
         messages.success(request, "Временная передача зарегистрирована.")
         return redirect(obj)
     return render(request, "inventory/model_form.html", {"form": form, "title": f"Передать: {obj}", "cancel_url": obj.get_absolute_url(), "multipart": True})
@@ -1169,21 +1205,32 @@ def equipment_loan(request, pk):
 @login_required
 @require_POST
 def loan_return(request, pk):
-    loan = get_object_or_404(EquipmentLoan.objects.select_related("equipment"), pk=pk, status=EquipmentLoan.Status.ACTIVE)
-    loan.status = EquipmentLoan.Status.RETURNED
-    loan.returned_at = timezone.localdate()
-    loan.save(update_fields=["status", "returned_at", "updated_at"])
-    obj = loan.equipment
-    old_status = obj.usage_status
-    obj.usage_status = Equipment.UsageStatus.STOCK
-    obj.responsible_employee = None
-    obj.save()
-    EquipmentMovement.objects.create(
-        equipment=obj, movement_type=EquipmentMovement.MovementType.LOAN_RETURN,
-        from_organization=loan.borrower, to_organization=loan.lender,
-        from_status=old_status, to_status=obj.usage_status, created_by=request.user,
+    loan = get_object_or_404(
+        EquipmentLoan.objects.select_related("equipment", "borrower", "lender"),
+        pk=pk, status=EquipmentLoan.Status.ACTIVE,
     )
-    messages.success(request, "Оборудование возвращено владельцу.")
+    with transaction.atomic():
+        obj = Equipment.objects.select_for_update().get(pk=loan.equipment_id)
+        old_status = obj.usage_status
+        old_employee = obj.responsible_employee
+        state = loan.previous_state or {}
+        obj.usage_status = state.get("usage_status") or Equipment.UsageStatus.STOCK
+        obj.responsible_employee_id = state.get("responsible_employee_id")
+        obj.location_id = state.get("location_id")
+        obj.room_id = state.get("room_id")
+        obj.cabinet_id = state.get("cabinet_id")
+        obj.freeform_location = state.get("freeform_location", "")
+        obj.save()
+        loan.status = EquipmentLoan.Status.RETURNED
+        loan.returned_at = timezone.localdate()
+        loan.save(update_fields=["status", "returned_at", "updated_at"])
+        EquipmentMovement.objects.create(
+            equipment=obj, movement_type=EquipmentMovement.MovementType.LOAN_RETURN,
+            from_employee=old_employee, to_employee=obj.responsible_employee,
+            from_organization=loan.borrower, to_organization=loan.lender,
+            from_status=old_status, to_status=obj.usage_status, created_by=request.user,
+        )
+    messages.success(request, "Оборудование возвращено в предыдущее состояние.")
     return redirect(obj)
 
 
@@ -1191,6 +1238,22 @@ def loan_return(request, pk):
 @require_POST
 def equipment_archive(request, pk):
     obj = get_object_or_404(Equipment, pk=pk)
+    if not obj.archived:
+        reasons = []
+        if obj.loans.filter(status=EquipmentLoan.Status.ACTIVE).exists():
+            reasons.append("есть активная временная передача")
+        if obj.responsible_employee_id:
+            reasons.append("оборудование закреплено за сотрудником")
+        if obj.usage_status not in {
+            Equipment.UsageStatus.STOCK,
+            Equipment.UsageStatus.RESERVE,
+            Equipment.UsageStatus.WAITING_DISPOSAL,
+            Equipment.UsageStatus.DISPOSED,
+        }:
+            reasons.append(f"текущий статус: {obj.get_usage_status_display()}")
+        if reasons:
+            messages.error(request, "Нельзя переместить в архив: " + "; ".join(reasons) + ".")
+            return redirect(obj)
     obj.archived = not obj.archived
     obj.save(update_fields=["archived", "updated_at"])
     messages.success(request, "Архивный статус оборудования изменён.")
@@ -1199,6 +1262,8 @@ def equipment_archive(request, pk):
 
 @login_required
 def reveal_network_password(request, pk):
+    if not request.user.is_staff:
+        raise PermissionDenied
     obj = get_object_or_404(Equipment, pk=pk)
     return JsonResponse({"password": obj.get_network_password()})
 

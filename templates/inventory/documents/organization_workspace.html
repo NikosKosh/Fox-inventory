@@ -132,26 +132,8 @@
   </section>
 
 {% else %}
-  <section class="relationship-hero compact relationship-hero-v2">
-    <div class="relationship-side active-side">
-      <small>Вы смотрите от лица</small>
-      <b>{{ organization }}</b>
-    </div>
-    <div class="relationship-route-arrow">↔</div>
-    <div class="relationship-side">
-      <small>{% if selected_party.internal %}Наша организация{% else %}Контрагент{% endif %}</small>
-      <b>{{ selected_party.name }}</b>
-      {% if selected_party.internal and selected_party.organization_id %}
-        <a href="{% url 'organization_document_workspace' selected_party.organization_id %}">Открыть от её лица →</a>
-      {% endif %}
-    </div>
-  </section>
 
   <nav class="relationship-actionbar">
-    <div class="relationship-actionbar-label">
-      <span>Действия</span>
-      <small>Контекст уже выбран — повторно выбирать стороны не придётся.</small>
-    </div>
     <div class="relationship-actionbar-buttons">
       <a class="btn" href="{% url 'contract_add' %}?organization={{ organization.pk }}&counterparty={{ selected_party.form_counterparty_id }}&view={{ organization.pk }}">+ Договор</a>
       <a class="btn" href="{% url 'operation_add' %}?organization={{ organization.pk }}&counterparty={{ selected_party.form_counterparty_id }}&view={{ organization.pk }}">+ Пакет</a>

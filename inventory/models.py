@@ -384,6 +384,7 @@ class EquipmentLoan(TimeStampedModel):
     document = models.FileField("Документ", upload_to="loans/%Y/%m/", blank=True, validators=[validate_document])
     notes = models.TextField("Комментарий", blank=True)
     status = models.CharField("Статус", max_length=20, choices=Status.choices, default=Status.ACTIVE)
+    previous_state = models.JSONField("Состояние до передачи", default=dict, blank=True)
 
     class Meta:
         ordering = ["-started_at", "-created_at"]

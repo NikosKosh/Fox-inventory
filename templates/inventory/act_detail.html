@@ -14,7 +14,6 @@
     <a class="btn" href="{% url 'act_list' %}">Все акты</a>
     <a class="btn" id="act-download" href="{% url 'act_download' object.pk %}">Скачать документ</a>
     <a class="btn" href="{% url 'act_edit' object.pk %}">Изменить / заменить подписанным сканом</a>
-    {% if request.user.is_staff %}<a class="btn danger" href="{% url 'act_delete' object.pk %}">Удалить акт</a>{% endif %}
   </div>
 </div>
 <div class="grid two">

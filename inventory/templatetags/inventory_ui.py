@@ -19,60 +19,39 @@ def _sort_state(context, field, default_field, default_direction):
     return active, direction, query.urlencode()
 
 
-def _sort_indicator(state):
-    if state == "asc":
-        path = '<path d="M4 10l4-4 4 4" />'
-    elif state == "desc":
-        path = '<path d="M4 6l4 4 4-4" />'
-    else:
-        path = '<path d="M4.5 6.5L8 3l3.5 3.5M4.5 9.5L8 13l3.5-3.5" />'
-    return format_html(
-        '<span class="sort-indicator state-{}" aria-hidden="true">'
-        '<svg viewBox="0 0 16 16" focusable="false">{}</svg>'
-        '</span>',
-        state,
-        format_html(path),
-    )
-
-
 @register.simple_tag(takes_context=True)
 def sort_header(context, field, label, default_field="", default_direction="asc"):
     active, direction, query = _sort_state(context, field, default_field, default_direction)
     state = "asc" if active and direction == "asc" else "desc" if active else "none"
-    action = (
-        "сортировать по убыванию"
+    title = (
+        "Сортировать по убыванию"
         if active and direction == "asc"
-        else "сортировать по возрастанию"
+        else "Сортировать по возрастанию"
     )
     css = "sortable-link active" if active else "sortable-link"
+    aria_sort = "ascending" if active and direction == "asc" else "descending" if active else "none"
     return format_html(
-        '<a class="{}" href="?{}" aria-label="{}: {}">'
-        '<span class="sort-label">{}</span>{}</a>',
+        '<a class="{}" href="?{}" title="{}" aria-label="{}; текущая сортировка: {}">'
+        '<span class="sort-label">{}</span><span class="sort-arrow state-{}" aria-hidden="true"></span></a>',
         css,
         query,
+        title,
         label,
-        action,
+        aria_sort,
         label,
-        _sort_indicator(state),
+        state,
     )
 
 
 @register.simple_tag(takes_context=True)
 def sort_chip(context, field, label, default_field="", default_direction="asc"):
     active, direction, query = _sort_state(context, field, default_field, default_direction)
-    state = "asc" if active and direction == "asc" else "desc" if active else "none"
-    action = (
-        "сортировать по убыванию"
-        if active and direction == "asc"
-        else "сортировать по возрастанию"
-    )
+    indicator = "↑" if active and direction == "asc" else "↓" if active else "↕"
     css = "sort-chip active" if active else "sort-chip"
     return format_html(
-        '<a class="{}" href="?{}" aria-label="{}: {}"><span>{}</span>{}</a>',
+        '<a class="{}" href="?{}"><span>{}</span><span aria-hidden="true">{}</span></a>',
         css,
         query,
         label,
-        action,
-        label,
-        _sort_indicator(state),
+        indicator,
     )

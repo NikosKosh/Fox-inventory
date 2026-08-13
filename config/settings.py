@@ -104,7 +104,7 @@ MAX_UPLOAD_MB = int(os.getenv("MAX_UPLOAD_MB", "25"))
 DATA_UPLOAD_MAX_MEMORY_SIZE = MAX_UPLOAD_MB * 1024 * 1024
 FILE_UPLOAD_MAX_MEMORY_SIZE = 5 * 1024 * 1024
 
-# Authentication audit and throttling. Username and IP limits are evaluated separately.
+# Authentication audit and throttling.
 LOGIN_MAX_FAILURES = max(1, int(os.getenv("LOGIN_MAX_FAILURES", "5")))
 LOGIN_IP_MAX_FAILURES = max(LOGIN_MAX_FAILURES, int(os.getenv("LOGIN_IP_MAX_FAILURES", "20")))
 LOGIN_FAILURE_WINDOW_MINUTES = max(1, int(os.getenv("LOGIN_FAILURE_WINDOW_MINUTES", "15")))

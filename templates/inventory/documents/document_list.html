@@ -22,31 +22,20 @@
   <span class="registry-counts"><b>{{ logical_total }}</b> записей · <b>{{ matching_files_total }}</b> файлов</span>
 </div>
 
-<form class="filters auto-filter document-filters" method="get">
+<form class="filters auto-filter document-filters document-filters-v2" method="get">
   <input type="hidden" name="mode" value="{{ mode }}">
   <input class="input grow" type="search" name="q" value="{{ q }}" placeholder="Название, номер, файл, ИНН, договор или пакет">
-  <select class="input" name="organization">
-    <option value="">Все организации</option>
-    {% for org in organizations %}<option value="{{ org.pk }}" {% if selected_organization == org.pk|stringformat:'s' %}selected{% endif %}>{{ org }}</option>{% endfor %}
-  </select>
-  <select class="input" name="type">
-    <option value="">Все типы</option>
-    <option value="attention" {% if selected_type == 'attention' %}selected{% endif %}>Требует внимания</option>
-    {% for type in document_types %}<option value="{{ type.pk }}" {% if selected_type == type.pk|stringformat:'s' %}selected{% endif %}>{{ type.name }}</option>{% endfor %}
-  </select>
-  <select class="input" name="counterparty">
-    <option value="">Все стороны</option>
-    {% for cp in counterparties %}<option value="{{ cp.pk }}" {% if selected_counterparty == cp.pk|stringformat:'s' %}selected{% endif %}>{{ cp }}</option>{% endfor %}
-  </select>
-  <select class="input" name="contract">
-    <option value="">Все договоры</option>
-    {% for c in contracts %}<option value="{{ c.pk }}" {% if selected_contract == c.pk|stringformat:'s' %}selected{% endif %}>{{ c.organization }} · {{ c }}</option>{% endfor %}
-  </select>
-  <select class="input" name="year">
-    <option value="">Все годы</option>
-    {% for d in years %}<option value="{{ d|date:'Y' }}" {% if selected_year == d|date:'Y' %}selected{% endif %}>{{ d|date:'Y' }}</option>{% endfor %}
-  </select>
-  <label class="registry-unpacked-toggle"><input type="checkbox" name="unpacked" value="1" {% if only_unpacked %}checked{% endif %}> Только вне пакетов</label>
+  <select class="input" name="organization"><option value="">Все организации</option>{% for org in organizations %}<option value="{{ org.pk }}" {% if selected_organization == org.pk|stringformat:'s' %}selected{% endif %}>{{ org }}</option>{% endfor %}</select>
+  <select class="input" name="type"><option value="">Все типы</option><option value="attention" {% if selected_type == 'attention' %}selected{% endif %}>Требует внимания</option>{% for type in document_types %}<option value="{{ type.pk }}" {% if selected_type == type.pk|stringformat:'s' %}selected{% endif %}>{{ type.name }}</option>{% endfor %}</select>
+  <details class="filter-more" {% if selected_counterparty or selected_contract or selected_year or only_unpacked %}open{% endif %}>
+    <summary class="btn">Ещё фильтры</summary>
+    <div class="filter-more-popover">
+      <select class="input" name="counterparty"><option value="">Все стороны</option>{% for cp in counterparties %}<option value="{{ cp.pk }}" {% if selected_counterparty == cp.pk|stringformat:'s' %}selected{% endif %}>{{ cp }}</option>{% endfor %}</select>
+      <select class="input" name="contract"><option value="">Все договоры</option>{% for c in contracts %}<option value="{{ c.pk }}" {% if selected_contract == c.pk|stringformat:'s' %}selected{% endif %}>{{ c.organization }} · {{ c }}</option>{% endfor %}</select>
+      <select class="input" name="year"><option value="">Все годы</option>{% for d in years %}<option value="{{ d|date:'Y' }}" {% if selected_year == d|date:'Y' %}selected{% endif %}>{{ d|date:'Y' }}</option>{% endfor %}</select>
+      <label class="registry-unpacked-toggle"><input type="checkbox" name="unpacked" value="1" {% if only_unpacked %}checked{% endif %}> Только вне пакетов</label>
+    </div>
+  </details>
   {% if q or selected_organization or selected_type or selected_counterparty or selected_contract or selected_year or only_unpacked %}<a class="btn" href="{% url 'document_list' %}?mode={{ mode }}">Сбросить</a>{% endif %}
 </form>
 
