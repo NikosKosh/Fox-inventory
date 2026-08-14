@@ -1,0 +1,20 @@
+FOX Inventory 1.5.1 — validation
+Date: 2026-08-14
+
+Offline checks completed:
+- Python compileall: PASS
+- AST parsing: PASS
+- XLSX export smoke test with a representative equipment object: PASS
+- Workbook structure: 3 sheets (Оборудование / Технические данные / Служебные данные): PASS
+- Main report headers reduced to 10 columns: PASS
+- Main report excludes raw comments/MAC/Hostname/IP/login: PASS
+- Technical fields available on Технические данные: PASS
+- Raw comments preserved on Служебные данные: PASS
+- Freeze panes / filters / fixed widths / XLSX serialization: PASS
+- Visual render of the main report inspected: PASS
+
+Not run in this build environment:
+- Django manage.py check
+- Django test suite
+Reason: Django is not installed in the local build container.
+GitHub CI must run the Django checks and tests after push before production deployment.
