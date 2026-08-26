@@ -6,6 +6,7 @@ from django.db.models import Q
 from django.urls import reverse
 from django.utils import timezone
 from .crypto import decrypt_text, encrypt_text
+from .catalog import extract_catalog_sku, make_catalog_identity_key
 from .validators import normalize_mac_address, validate_business_document, validate_document, validate_mac_address
 
 
@@ -194,6 +195,77 @@ class Category(TimeStampedModel):
         return self.name
 
 
+class CatalogItem(TimeStampedModel):
+    category = models.ForeignKey(Category, verbose_name="Категория", on_delete=models.PROTECT, related_name="catalog_items")
+    accounting_group = models.CharField(
+        "Контур учёта",
+        max_length=20,
+        choices=[("employee", "Для сотрудников"), ("technical", "Техническое")],
+        default="employee",
+        db_index=True,
+    )
+    name = models.CharField("Наименование", max_length=255)
+    manufacturer = models.CharField("Производитель", max_length=150, blank=True)
+    model = models.CharField("Модель / конфигурация", max_length=180, blank=True)
+    sku = models.CharField("Артикул / код модели", max_length=80, blank=True, db_index=True)
+    identity_key = models.CharField(max_length=600, unique=True, editable=False)
+    unit_price = models.DecimalField("Учётная цена, ₽", max_digits=14, decimal_places=2, null=True, blank=True, validators=[MinValueValidator(0)])
+    price_needs_review = models.BooleanField("Цена требует подтверждения", default=False, db_index=True)
+    notes = models.TextField("Комментарий", blank=True)
+    archived = models.BooleanField("В архиве", default=False)
+
+    class Meta:
+        ordering = ["category__name", "manufacturer", "model", "name"]
+        verbose_name = "номенклатура"
+        verbose_name_plural = "номенклатура"
+        indexes = [
+            models.Index(fields=["manufacturer", "model"], name="catalog_maker_model_idx"),
+            models.Index(fields=["category", "archived"], name="catalog_category_active_idx"),
+        ]
+
+    def __str__(self):
+        bits = [self.name]
+        if self.sku:
+            bits.append(self.sku)
+        elif self.model:
+            bits.append(self.model)
+        return " · ".join(bits)
+
+    def get_absolute_url(self):
+        return reverse("catalog_detail", args=[self.pk])
+
+    def save(self, *args, **kwargs):
+        if not self.sku:
+            self.sku = extract_catalog_sku(self.model)
+        self.identity_key = make_catalog_identity_key(
+            self.category.code if self.category_id else "",
+            self.manufacturer,
+            self.model,
+            self.sku,
+        )
+        super().save(*args, **kwargs)
+
+
+class CatalogPriceHistory(TimeStampedModel):
+    catalog_item = models.ForeignKey(CatalogItem, verbose_name="Номенклатура", on_delete=models.CASCADE, related_name="price_history")
+    unit_price = models.DecimalField("Цена, ₽", max_digits=14, decimal_places=2, validators=[MinValueValidator(0)])
+    effective_date = models.DateField("Дата цены", null=True, blank=True)
+    source = models.CharField("Источник", max_length=255, blank=True)
+    changed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        verbose_name="Изменил",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="catalog_price_changes",
+    )
+
+    class Meta:
+        ordering = ["-effective_date", "-created_at", "-pk"]
+        verbose_name = "история цены"
+        verbose_name_plural = "история цен"
+
+
 class Equipment(TimeStampedModel):
     class AccountingGroup(models.TextChoices):
         EMPLOYEE = "employee", "Для сотрудников"
@@ -217,6 +289,14 @@ class Equipment(TimeStampedModel):
     internal_code = models.CharField("Внутренний номер", max_length=80, unique=True, blank=True)
     accounting_group = models.CharField("Контур учёта", max_length=20, choices=AccountingGroup.choices, default=AccountingGroup.EMPLOYEE, db_index=True)
     category = models.ForeignKey(Category, verbose_name="Категория", on_delete=models.PROTECT, related_name="equipment")
+    catalog_item = models.ForeignKey(
+        CatalogItem,
+        verbose_name="Номенклатура",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="equipment",
+    )
     name = models.CharField("Наименование", max_length=255)
     manufacturer = models.CharField("Производитель", max_length=150, blank=True)
     model = models.CharField("Модель", max_length=180, blank=True)
@@ -256,7 +336,29 @@ class Equipment(TimeStampedModel):
         ]
 
     def __str__(self):
-        return f"{self.internal_code or 'без кода'} — {self.name}"
+        return f"{self.internal_code or 'без кода'} — {self.display_name}"
+
+    @property
+    def display_name(self):
+        return self.catalog_item.name if self.catalog_item_id else self.name
+
+    @property
+    def display_manufacturer(self):
+        return self.catalog_item.manufacturer if self.catalog_item_id else self.manufacturer
+
+    @property
+    def display_model(self):
+        return self.catalog_item.model if self.catalog_item_id else self.model
+
+    @property
+    def unit_price(self):
+        return self.catalog_item.unit_price if self.catalog_item_id else None
+
+    @property
+    def total_value(self):
+        if self.unit_price is None:
+            return None
+        return self.unit_price * self.quantity
 
     def get_absolute_url(self):
         return reverse("equipment_detail", args=[self.pk])
@@ -283,6 +385,12 @@ class Equipment(TimeStampedModel):
 
     def save(self, *args, **kwargs):
         self.mac_address = normalize_mac_address(self.mac_address)
+        if self.catalog_item_id:
+            self.category = self.catalog_item.category
+            self.accounting_group = self.catalog_item.accounting_group
+            self.name = self.catalog_item.name
+            self.manufacturer = self.catalog_item.manufacturer
+            self.model = self.catalog_item.model
         if not self.internal_code and self.category_id and self.owner_id and self.category.tracking_mode == Category.TrackingMode.UNIT:
             with transaction.atomic():
                 self.internal_code = self.next_code(self.owner, self.category)
@@ -429,6 +537,40 @@ class Act(TimeStampedModel):
 
     def get_absolute_url(self):
         return reverse("act_detail", args=[self.pk])
+
+
+class ActItem(TimeStampedModel):
+    act = models.ForeignKey(Act, verbose_name="Акт", on_delete=models.CASCADE, related_name="items")
+    equipment = models.ForeignKey(Equipment, verbose_name="Оборудование", on_delete=models.PROTECT, related_name="act_items")
+    catalog_item = models.ForeignKey(
+        CatalogItem,
+        verbose_name="Номенклатура",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="act_items",
+    )
+    position = models.PositiveIntegerField("№", default=1)
+    item_name = models.CharField("Наименование", max_length=255)
+    manufacturer = models.CharField("Производитель", max_length=150, blank=True)
+    model = models.CharField("Модель", max_length=255, blank=True)
+    internal_code = models.CharField("Внутренний номер", max_length=80, blank=True)
+    serial_number = models.CharField("Серийный номер", max_length=180, blank=True)
+    condition = models.CharField("Состояние", max_length=100, blank=True)
+    quantity = models.PositiveIntegerField("Количество", default=1)
+    unit_price = models.DecimalField("Цена, ₽", max_digits=14, decimal_places=2, null=True, blank=True, validators=[MinValueValidator(0)])
+    line_total = models.DecimalField("Сумма, ₽", max_digits=16, decimal_places=2, null=True, blank=True, validators=[MinValueValidator(0)])
+
+    class Meta:
+        ordering = ["position", "pk"]
+        verbose_name = "строка акта"
+        verbose_name_plural = "строки акта"
+        constraints = [
+            models.UniqueConstraint(fields=["act", "equipment"], name="uniq_act_equipment_snapshot"),
+        ]
+
+    def __str__(self):
+        return f"{self.act} · {self.position}. {self.item_name}"
 
 
 class RepairRecord(TimeStampedModel):

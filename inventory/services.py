@@ -1,4 +1,5 @@
 import csv
+from decimal import Decimal, InvalidOperation
 from io import BytesIO, StringIO
 from pathlib import Path
 from django.db import transaction
@@ -7,17 +8,28 @@ from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from .models import Category, Employee, Equipment, EquipmentMovement, Location, Organization, Room
+from .catalog import ensure_catalog_item, format_money, parse_note_date, parse_note_price, parse_price_source
 
 IMPORT_COLUMNS = [
     "organization", "organization_prefix", "organization_kind", "category", "category_code", "accounting_group",
     "name", "manufacturer", "model", "serial_number", "mac_address", "internal_code", "hostname",
     "status", "condition", "employee", "position", "phone", "address", "location_label", "room", "room_type",
-    "freeform_location", "quantity", "notes", "network_address", "network_username",
+    "freeform_location", "quantity", "unit_price", "notes", "network_address", "network_username",
 ]
 
 
 def _clean(value):
     return str(value).strip() if value is not None else ""
+
+
+def _decimal_price(value):
+    text = _clean(value).replace(" ", "").replace(",", ".")
+    if not text:
+        return None
+    try:
+        return Decimal(text).quantize(Decimal("0.01"))
+    except (InvalidOperation, ValueError):
+        raise ValueError(f"некорректная цена: {value}")
 
 
 
@@ -124,6 +136,23 @@ def import_equipment(uploaded_file, user=None):
                 "network_address": row.get("network_address", ""),
                 "network_username": row.get("network_username", ""),
             }
+            explicit_price = _decimal_price(
+                row.get("unit_price") or row.get("price") or row.get("цена") or row.get("учётная цена")
+            )
+            note_text = defaults["notes"]
+            imported_price = explicit_price if explicit_price is not None else parse_note_price(note_text)
+            catalog_item = ensure_catalog_item(
+                category=category,
+                accounting_group=defaults["accounting_group"],
+                name=defaults["name"],
+                manufacturer=defaults["manufacturer"],
+                model=defaults["model"],
+                unit_price=imported_price,
+                source=(parse_price_source(note_text) if note_text else f"Импорт файла {getattr(uploaded_file, 'name', '')}") or "Импорт",
+                effective_date=(parse_note_date(note_text) or timezone.localdate()) if imported_price is not None else None,
+                changed_by=user,
+            )
+            defaults["catalog_item"] = catalog_item
             internal_code = row.get("internal_code", "")
             serial = defaults["serial_number"]
             if internal_code:
@@ -245,7 +274,7 @@ def _style_data_area(ws, start_row, end_row, last_column, wrap_columns=()):
 
 
 def _equipment_model_summary(obj):
-    model = " ".join(part for part in [obj.manufacturer, obj.model] if part).strip()
+    model = " ".join(part for part in [obj.display_manufacturer, obj.display_model] if part).strip()
     if obj.serial_number:
         return f"{model}\nS/N: {obj.serial_number}" if model else f"S/N: {obj.serial_number}"
     return model
@@ -303,6 +332,7 @@ def _add_kpi_card(ws, cell_range, value, label):
 def equipment_export_workbook(queryset):
     items = list(queryset.select_related(
         "category",
+        "catalog_item",
         "owner",
         "responsible_employee__organization",
         "location__organization",
@@ -316,6 +346,7 @@ def equipment_export_workbook(queryset):
         status: sum(obj.quantity for obj in items if obj.usage_status == status)
         for status, _label in Equipment.UsageStatus.choices
     }
+    inventory_value = sum((obj.total_value or Decimal("0.00")) for obj in items)
 
     wb = Workbook()
     ws = wb.active
@@ -325,7 +356,7 @@ def equipment_export_workbook(queryset):
         ws,
         "FOX Inventory — отчёт по оборудованию",
         f"Активное оборудование · сформировано {generated_date:%d.%m.%Y}",
-        10,
+        12,
     )
 
     _add_kpi_card(ws, "A4:B5", position_count, "позиций")
@@ -333,10 +364,11 @@ def equipment_export_workbook(queryset):
     _add_kpi_card(ws, "E4:F5", status_units.get(Equipment.UsageStatus.STOCK, 0), "на складе")
     _add_kpi_card(ws, "G4:H5", status_units.get(Equipment.UsageStatus.EMPLOYEE, 0), "у сотрудников")
     _add_kpi_card(ws, "I4:J5", status_units.get(Equipment.UsageStatus.OBJECT, 0), "на объектах")
+    _add_kpi_card(ws, "K4:L5", format_money(inventory_value), "учётная стоимость")
     ws.row_dimensions[4].height = 25
     ws.row_dimensions[5].height = 25
 
-    ws.merge_cells("A6:J6")
+    ws.merge_cells("A6:L6")
     ws["A6"] = (
         f"В ремонте: {status_units.get(Equipment.UsageStatus.REPAIR, 0)}   ·   "
         f"В резерве: {status_units.get(Equipment.UsageStatus.RESERVE, 0)}   ·   "
@@ -358,6 +390,8 @@ def equipment_export_workbook(queryset):
         "Статус",
         "Состояние",
         "Кол-во",
+        "Цена, ₽",
+        "Стоимость, ₽",
     ]
     for column, header in enumerate(main_headers, start=1):
         ws.cell(row=8, column=column, value=header)
@@ -368,17 +402,19 @@ def equipment_export_workbook(queryset):
             obj.internal_code,
             obj.get_accounting_group_display(),
             obj.category.name,
-            obj.name,
+            obj.display_name,
             _equipment_model_summary(obj),
             str(obj.owner),
             _equipment_placement_summary(obj),
             obj.get_usage_status_display(),
             obj.get_condition_display(),
             obj.quantity,
+            obj.unit_price,
+            obj.total_value,
         ])
 
     main_last_row = ws.max_row
-    _style_data_area(ws, 9, main_last_row, 10, wrap_columns={4, 5, 6, 7, 8})
+    _style_data_area(ws, 9, main_last_row, 12, wrap_columns={4, 5, 6, 7, 8})
     for row in range(9, main_last_row + 1):
         obj = items[row - 9]
         ws.cell(row=row, column=8).fill = PatternFill("solid", fgColor=STATUS_FILLS.get(obj.usage_status, REPORT_SOFT))
@@ -386,12 +422,14 @@ def equipment_export_workbook(queryset):
         ws.cell(row=row, column=8).font = Font(name="Calibri", size=10, bold=True, color=REPORT_TEXT)
         ws.cell(row=row, column=9).font = Font(name="Calibri", size=10, bold=True, color=REPORT_TEXT)
         ws.cell(row=row, column=10).number_format = "0"
+        ws.cell(row=row, column=11).number_format = '#,##0.00 [$₽-ru-RU]'
+        ws.cell(row=row, column=12).number_format = '#,##0.00 [$₽-ru-RU]'
 
-    _set_report_widths(ws, [16, 16, 20, 31, 30, 28, 38, 24, 15, 9])
+    _set_report_widths(ws, [16, 16, 20, 31, 30, 28, 38, 24, 15, 9, 14, 16])
     ws.freeze_panes = "A9"
-    ws.auto_filter.ref = f"A8:J{max(main_last_row, 8)}"
+    ws.auto_filter.ref = f"A8:L{max(main_last_row, 8)}"
     ws.print_title_rows = "8:8"
-    ws.print_area = f"A1:J{max(main_last_row, 8)}"
+    ws.print_area = f"A1:L{max(main_last_row, 8)}"
 
     technical = wb.create_sheet("Технические данные")
     technical.sheet_properties.tabColor = "5B7FA3"
@@ -412,9 +450,9 @@ def equipment_export_workbook(queryset):
         technical.append([
             obj.internal_code,
             obj.category.name,
-            obj.name,
-            obj.manufacturer,
-            obj.model,
+            obj.display_name,
+            obj.display_manufacturer,
+            obj.display_model,
             obj.serial_number,
             obj.mac_address,
             obj.hostname,
@@ -480,7 +518,7 @@ def import_template_workbook():
     ws.append([
         "ООО Компания", "ORG", "company", "Ноутбук", "N", "employee", "Ноутбук", "Lenovo", "ThinkPad",
         "SN123", "AA:BB:CC:DD:EE:FF", "ORG-N-001", "org-n-001", "employee", "used", "Иванов Иван Иванович",
-        "Инженер", "+7...", "г. Город, ул. Примерная, д. 1", "Главный офис", "Переговорная", "meeting", "", 1, "", "", "",
+        "Инженер", "+7...", "г. Город, ул. Примерная, д. 1", "Главный офис", "Переговорная", "meeting", "", 1, "75000.00", "", "", "",
     ])
     stream = BytesIO()
     wb.save(stream)

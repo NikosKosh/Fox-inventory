@@ -1,4 +1,4 @@
-{% extends "base.html" %}
+{% extends "base.html" %}{% load inventory_ui %}
 {% block content %}
 <div class="page-head compact-head">
   <div>
@@ -26,8 +26,8 @@
       <label class="equipment-choice">
         <input type="checkbox" name="equipment" value="{{ item.pk }}" {% if item.pk|stringformat:'s' in selected_equipment_ids %}checked{% endif %}>
         <span class="choice-code">{{ item.internal_code|default:"без кода" }}</span>
-        <span class="choice-main"><b>{{ item.name }}</b><small>{{ item.manufacturer }} {{ item.model }}{% if item.serial_number %} · SN: {{ item.serial_number }}{% endif %}</small></span>
-        <span class="choice-owner">{{ item.get_condition_display }}</span>
+        <span class="choice-main"><b>{{ item.display_name }}</b><small>{{ item.display_manufacturer }} {{ item.display_model }}{% if item.serial_number %} · SN: {{ item.serial_number }}{% endif %}</small></span>
+        <span class="choice-owner"><b>{{ item.unit_price|money }}</b><small>{{ item.get_condition_display }}</small></span>
       </label>
     {% empty %}<p class="muted picker-empty">За сотрудником нет оборудования для формирования акта.</p>{% endfor %}
   </div>

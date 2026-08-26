@@ -10,6 +10,8 @@ from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Cm, Pt
 
+from .catalog import format_money
+
 
 DEFAULT_FONT = "Times New Roman"
 
@@ -149,7 +151,7 @@ def _position_in_genitive(position: str) -> str:
 
 def _equipment_title(item):
     parts = []
-    for value in (item.name, item.manufacturer, item.model):
+    for value in (item.display_name, item.display_manufacturer, item.display_model):
         value = (value or "").strip()
         if value and value.lower() not in " ".join(parts).lower():
             parts.append(value)
@@ -164,7 +166,13 @@ def _equipment_title(item):
     return "\n".join(details)
 
 
-def _equipment_price(item):
+def _equipment_price_value(item, price_overrides=None):
+    if price_overrides and item.pk in price_overrides:
+        return price_overrides[item.pk]
+    if getattr(item, "unit_price", None) is not None:
+        return item.unit_price
+
+    # Compatibility fallback for records not yet tied to catalog pricing.
     text = item.notes or ""
     patterns = [
         r"цена\s+за\s+единицу\s+([\d\s]+(?:[.,]\d{1,2})?)\s*руб",
@@ -176,18 +184,18 @@ def _equipment_price(item):
             continue
         raw = match.group(1).replace(" ", "").replace(",", ".")
         try:
-            value = Decimal(raw)
+            return Decimal(raw).quantize(Decimal("0.01"))
         except InvalidOperation:
             continue
-        formatted = f"{value:,.2f}".replace(",", " ").replace(".", ",")
-        if formatted.endswith(",00"):
-            formatted = formatted[:-3]
-        return f"{formatted} руб."
-    return "—"
+    return None
+
+
+def _equipment_price(item, price_overrides=None):
+    return format_money(_equipment_price_value(item, price_overrides))
 
 
 def build_employee_transfer_docx(*, employee, equipment, act_date, organization_name, representative_position,
-                                 representative_name, city="", act_type="issue"):
+                                 representative_name, city="", act_type="issue", price_overrides=None):
     equipment = list(equipment)
     if act_type not in {"issue", "return"}:
         raise ValueError("Неизвестный тип акта")
@@ -267,14 +275,14 @@ def build_employee_transfer_docx(*, employee, equipment, act_date, organization_
         _append_run(transfer, organization_name, bold=True)
         _append_run(transfer, " принимает следующее имущество:")
 
-    table = document.add_table(rows=2, cols=5)
+    table = document.add_table(rows=2, cols=6)
     table.alignment = WD_TABLE_ALIGNMENT.CENTER
     table.style = "Table Grid"
     table.autofit = False
-    widths_cm = [1.1, 9.0, 2.5, 2.3, 3.4]
+    widths_cm = [0.9, 7.4, 2.0, 1.6, 2.8, 3.4]
     widths = [Cm(value) for value in widths_cm]
     _set_fixed_table_layout(table, widths_cm)
-    headers = ["№\nп/п", "Наименование оборудования", "Состояние", "Количество", "Стоимость,\nруб."]
+    headers = ["№\nп/п", "Наименование оборудования", "Состояние", "Кол-во", "Цена за ед.,\nруб.", "Сумма,\nруб."]
     for index, (cell, width, header) in enumerate(zip(table.rows[0].cells, widths, headers)):
         cell.width = width
         _set_cell_width(cell, widths_cm[index])
@@ -290,15 +298,35 @@ def build_employee_transfer_docx(*, employee, equipment, act_date, organization_
         _set_table_cell_margins(cell, top=25, bottom=25)
     _set_repeat_table_header(table.rows[1])
 
+    total_value = Decimal("0.00")
+    priced_items = 0
     for number, item in enumerate(equipment, start=1):
         row = table.add_row()
-        values = [number, _equipment_title(item), item.get_condition_display(), item.quantity, _equipment_price(item)]
+        unit_price = _equipment_price_value(item, price_overrides)
+        if unit_price is not None:
+            total_value += unit_price * (item.quantity or 1)
+            priced_items += 1
+        line_total = unit_price * (item.quantity or 1) if unit_price is not None else None
+        values = [number, _equipment_title(item), item.get_condition_display(), item.quantity, format_money(unit_price), format_money(line_total)]
         for idx, (cell, value, width) in enumerate(zip(row.cells, values, widths)):
             cell.width = width
             _set_cell_width(cell, widths_cm[idx])
             align = WD_ALIGN_PARAGRAPH.LEFT if idx == 1 else WD_ALIGN_PARAGRAPH.CENTER
             _set_cell_text(cell, value, bold=(idx == 0), size=10, align=align)
             _set_table_cell_margins(cell)
+
+    total_paragraph = document.add_paragraph()
+    total_paragraph.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    total_paragraph.paragraph_format.space_before = Pt(4)
+    total_paragraph.paragraph_format.space_after = Pt(4)
+    if priced_items == len(equipment) and equipment:
+        _append_run(total_paragraph, "Итого стоимость имущества: ")
+        _append_run(total_paragraph, format_money(total_value), bold=True)
+    elif priced_items:
+        _append_run(total_paragraph, "Стоимость определена не для всех позиций. Учтено: ")
+        _append_run(total_paragraph, format_money(total_value), bold=True)
+    else:
+        _append_run(total_paragraph, "Стоимость имущества: не задана.")
 
     if act_type == "issue":
         paragraphs = [

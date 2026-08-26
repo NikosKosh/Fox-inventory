@@ -1,16 +1,9 @@
-{% extends "base.html" %}
+{% extends "base.html" %}{% load inventory_ui %}
 {% block content %}
 <div class="page-head">
-  <div>
-    <h1>{{ object }}</h1>
-    <p class="muted">{{ object.get_act_type_display }}</p>
-  </div>
+  <div><h1>{{ object }}</h1><p class="muted">{{ object.get_act_type_display }}</p></div>
   <div class="actions">
-    {% if object.employee %}
-      <a class="btn primary" href="{{ object.employee.get_absolute_url }}">← К карточке сотрудника</a>
-    {% else %}
-      <a class="btn primary" href="{% url 'act_list' %}">← К списку актов</a>
-    {% endif %}
+    {% if object.employee %}<a class="btn primary" href="{{ object.employee.get_absolute_url }}">← К карточке сотрудника</a>{% else %}<a class="btn primary" href="{% url 'act_list' %}">← К списку актов</a>{% endif %}
     <a class="btn" href="{% url 'act_list' %}">Все акты</a>
     <a class="btn" id="act-download" href="{% url 'act_download' object.pk %}">Скачать документ</a>
     <a class="btn" href="{% url 'act_edit' object.pk %}">Изменить / заменить подписанным сканом</a>
@@ -26,9 +19,18 @@
       <dt>Получающая организация</dt><dd>{{ object.to_organization|default:"—" }}</dd>
       <dt>Комментарий</dt><dd>{{ object.notes|default:"—" }}</dd>
       <dt>Публичная ссылка</dt><dd>{% if object.public_enabled %}<a href="{% url 'public_act' object.public_token %}" target="_blank">Открыть</a>{% else %}Выключена{% endif %}</dd>
+      {% if act_items %}<dt>Стоимость по акту</dt><dd>{% if act_missing_price_count %}<b>{{ act_known_total|money }}</b> <span class="badge warn">без цены: {{ act_missing_price_count }}</span>{% else %}<b>{{ act_total|money }}</b>{% endif %}</dd>{% endif %}
     </dl>
     <h3>Оборудование</h3>
-    {% for item in object.equipment.all %}<a class="row-link" href="{{ item.get_absolute_url }}"><span>{{ item }}</span><small>{{ item.get_usage_status_display }}</small></a>{% empty %}<p class="muted">Не привязано.</p>{% endfor %}
+    {% if act_items %}
+      <div class="table-wrap"><table class="act-price-table"><thead><tr><th>№</th><th>Оборудование</th><th>Код / SN</th><th>Кол-во</th><th>Цена</th><th>Сумма</th></tr></thead><tbody>
+      {% for item in act_items %}<tr><td>{{ item.position }}</td><td><a href="{{ item.equipment.get_absolute_url }}"><b>{{ item.item_name }}</b></a><small>{{ item.manufacturer }} {{ item.model }}</small></td><td><code>{{ item.internal_code|default:"—" }}</code><small>{{ item.serial_number|default:"—" }}</small></td><td>{{ item.quantity }}</td><td>{{ item.unit_price|money }}</td><td><b>{{ item.line_total|money }}</b></td></tr>{% endfor %}
+      </tbody></table></div>
+      <p class="muted snapshot-note">Цена зафиксирована в момент создания акта и не изменится при последующем изменении номенклатуры.</p>
+    {% else %}
+      {% for item in object.equipment.all %}<a class="row-link" href="{{ item.get_absolute_url }}"><span>{{ item }}</span><small>{{ item.get_usage_status_display }}</small></a>{% empty %}<p class="muted">Не привязано.</p>{% endfor %}
+      {% if object.equipment.all %}<p class="muted snapshot-note">Исторический акт создан до введения снимков стоимости в FOX Inventory 1.6.0. Его исходный документ не изменён.</p>{% endif %}
+    {% endif %}
   </section>
   <section class="card document-frame">
     {% if object.document.name|lower|slice:'-4:' == '.pdf' %}<iframe src="{{ object.document.url }}"></iframe>{% elif object.document.name %}<p>DOCX хранится в системе. Используйте кнопку «Скачать документ».</p>{% else %}<p class="muted">Файл не загружен.</p>{% endif %}
@@ -36,29 +38,9 @@
 </div>
 <section class="card">
   <h2>Операции по этому акту</h2>
-  <div class="table-wrap">
-    <table>
-      <thead><tr><th>Дата</th><th>Оборудование</th><th>Операция</th><th>Откуда</th><th>Куда</th></tr></thead>
-      <tbody>
-      {% for item in movements %}
-        <tr>
-          <td>{{ item.created_at|date:"d.m.Y H:i" }}</td>
-          <td><a href="{{ item.equipment.get_absolute_url }}">{{ item.equipment.internal_code|default:item.equipment.name }}</a></td>
-          <td>{{ item.get_movement_type_display }}</td>
-          <td>{{ item.from_employee|default:item.from_organization|default:"—" }}</td>
-          <td>{{ item.to_employee|default:item.to_organization|default:"—" }}</td>
-        </tr>
-      {% empty %}<tr><td colspan="5">Связанных операций нет.</td></tr>{% endfor %}
-      </tbody>
-    </table>
-  </div>
+  <div class="table-wrap"><table><thead><tr><th>Дата</th><th>Оборудование</th><th>Операция</th><th>Откуда</th><th>Куда</th></tr></thead><tbody>
+  {% for item in movements %}<tr><td>{{ item.created_at|date:"d.m.Y H:i" }}</td><td><a href="{{ item.equipment.get_absolute_url }}">{{ item.equipment.internal_code|default:item.equipment.name }}</a></td><td>{{ item.get_movement_type_display }}</td><td>{{ item.from_employee|default:item.from_organization|default:"—" }}</td><td>{{ item.to_employee|default:item.to_organization|default:"—" }}</td></tr>{% empty %}<tr><td colspan="5">Связанных операций нет.</td></tr>{% endfor %}
+  </tbody></table></div>
 </section>
-{% if auto_download %}
-<script>
-window.addEventListener('load', () => {
-  const link = document.getElementById('act-download');
-  if (link) window.location.href = link.href;
-});
-</script>
-{% endif %}
+{% if auto_download %}<script>window.addEventListener('load',()=>{const link=document.getElementById('act-download');if(link)window.location.href=link.href;});</script>{% endif %}
 {% endblock %}

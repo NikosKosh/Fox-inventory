@@ -1,0 +1,58 @@
+FOX Inventory 1.6.0 — validation report
+Date: 2026-08-26
+
+Production baseline supplied before build
+-----------------------------------------
+Version: 1.5.1
+Commit: 534c7fe3696d6d37a12c009e1bbc00b4ef3df4bf
+Equipment: 370 active / 370 total
+Movements: 432
+Acts: 42 (33 issue, 9 return)
+Production migrations: 0001..0016 applied
+Production Django system check: no issues
+Catalog diagnostic: 46 raw model groups before SKU normalization; 340 equipment cards contain price hints.
+
+Expected migration behavior
+---------------------------
+- 0017_catalog_pricing creates CatalogItem, CatalogPriceHistory and ActItem.
+- Every existing Equipment row is assigned to a catalog item during the data migration.
+- Identity prefers category + manufacturer + SKU when a reliable SKU is embedded in model text; otherwise category + manufacturer + normalized model.
+- Honor 5301ARGN and 5301ARGQ remain separate.
+- Logitech M170 model variants with SKU 910-004642 merge into one nomenclature item.
+- Historical price hints are retained as CatalogPriceHistory.
+- Multiple historic prices mark the current catalog price for review instead of discarding price history.
+- Existing acts and stored act files are not rewritten.
+
+Offline validation performed in the build environment
+-----------------------------------------------------
+PASS: python -m compileall -q config inventory
+PASS: AST parse of 60 Python source files
+PASS: migration numbering contiguous 0001..0017
+PASS: 0017 migration statically contains CatalogItem, CatalogPriceHistory, Equipment.catalog_item, ActItem and RunPython seed
+PASS: catalog SKU extraction smoke tests
+PASS: ARGQ / ARGN identity separation test
+PASS: Logitech M170 SKU identity merge test
+PASS: imported price/date parsing tests
+PASS: latest-dated price selection test
+PASS: money formatting test
+PASS: migration helper extraction/price-selection smoke tests
+PASS: all literal template URL names resolve against project URL names
+PASS: paired Django template control tags balanced
+PASS: CSS brace balance
+PASS: templates/base.html inline JavaScript passes node --check
+PASS: DOCX transfer-act smoke generation with Price per unit / Amount / Total and 62 499,00 RUB-equivalent formatted value
+
+Behavioral safeguards included
+------------------------------
+- A new differing purchase/import price is appended to history and does not silently overwrite an already established accounting price; the nomenclature is flagged for review.
+- Editing/confirming a nomenclature price applies it to every linked physical unit.
+- New equipment created through the normal form is automatically linked to a catalog item if none was selected explicitly.
+- New imports resolve/create catalog items and support the unit_price column.
+- New acts snapshot name/model/code/SN/quantity/price/amount.
+- Return acts reuse the most recent issue snapshot price for the same employee/equipment when available.
+- Acts with a pricing snapshot lock the equipment selection during normal edit, preventing the saved document and historical composition from drifting apart.
+
+Environment limitation
+----------------------
+Django itself is not installed in the local artifact build environment and network package installation is unavailable, so manage.py check / makemigrations --check / full Django tests could not be executed locally against 1.6.0.
+The repository GitHub Actions workflow must run the full Django validation after push and before production deployment.

@@ -1,11 +1,12 @@
 import mimetypes
+from decimal import Decimal
 from datetime import timedelta
 from pathlib import Path
 from urllib.parse import quote
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.db import transaction
-from django.db.models import Count, F, Q, Value
+from django.db.models import Count, F, Q, Sum, Value
 from django.db.models.functions import Coalesce, Lower
 from django.core.exceptions import PermissionDenied
 from django.core.paginator import Paginator
@@ -18,13 +19,14 @@ from django.utils import timezone
 from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.decorators.http import require_POST
 from .forms import (
-    ActForm, AssignmentForm, CabinetForm, CategoryForm, EmployeeActDocumentForm,
+    ActForm, AssignmentForm, CabinetForm, CatalogItemForm, CategoryForm, EmployeeActDocumentForm,
     EmployeeEquipmentActWorkflowForm, EmployeeEquipmentOperationForm, EmployeeForm, EquipmentForm, ImportForm, LoanForm,
     LocationForm, OrganizationForm, RepairForm, RoomForm, RoomEquipmentAssignForm,
 )
-from .models import Act, Cabinet, Category, Contract, DocumentRecord, Employee, Equipment, EquipmentLoan, EquipmentMovement, Location, Organization, Reminder, RepairRecord, Room
+from .models import Act, ActItem, Cabinet, CatalogItem, CatalogPriceHistory, Category, Contract, DocumentRecord, Employee, Equipment, EquipmentLoan, EquipmentMovement, Location, Organization, Reminder, RepairRecord, Room
 from .services import equipment_export_workbook, import_equipment, import_template_workbook
 from .documents import build_employee_transfer_docx, short_person_name
+from .catalog import ensure_catalog_item, format_money, return_price_overrides, snapshot_act_items
 
 
 BUSINESS_MOVEMENT_TYPES = [
@@ -179,7 +181,7 @@ def _attention_snapshot(limit=30):
     misplaced = list(
         Equipment.objects.filter(archived=False, usage_status=Equipment.UsageStatus.OBJECT)
         .filter(location__isnull=True, cabinet__isnull=True, freeform_location="")
-        .select_related("category", "owner")[:limit]
+        .select_related("category", "catalog_item", "owner")[:limit]
     )
     duplicate_serial_values = list(
         Equipment.objects.filter(archived=False).exclude(serial_number="")
@@ -197,7 +199,7 @@ def _attention_snapshot(limit=30):
     without_act = []
     employees = Employee.objects.filter(archived=False).select_related("organization", "workplace_location")
     for employee in employees:
-        equipment = list(employee.equipment.filter(archived=False).select_related("category", "owner"))
+        equipment = list(employee.equipment.filter(archived=False).select_related("category", "catalog_item", "owner"))
         if not equipment:
             continue
         state = _employee_equipment_set(equipment, [])
@@ -208,13 +210,24 @@ def _attention_snapshot(limit=30):
         if missing_docs and len(without_act) < limit:
             without_act.append({"employee": employee, "items": missing_docs})
 
-    total = len(unlinked) + len(misplaced) + len(duplicate_serials) + len(incomplete) + len(without_act)
+    catalog_price_issues = list(
+        CatalogItem.objects.filter(archived=False)
+        .filter(Q(unit_price__isnull=True) | Q(price_needs_review=True))
+        .select_related("category")
+        .order_by("category__name", "manufacturer", "model", "pk")[:limit]
+    )
+
+    total = (
+        len(unlinked) + len(misplaced) + len(duplicate_serials)
+        + len(incomplete) + len(without_act) + len(catalog_price_issues)
+    )
     return {
         "unlinked_employees": unlinked,
         "misplaced_equipment": misplaced,
         "duplicate_serials": duplicate_serials,
         "incomplete_sets": incomplete,
         "without_act": without_act,
+        "catalog_price_issues": catalog_price_issues,
         "total": total,
     }
 
@@ -276,6 +289,13 @@ def dashboard(request):
         if len(dashboard_reminders) >= 6:
             break
 
+    priced_equipment = list(
+        Equipment.objects.filter(archived=False).select_related("catalog_item")
+    )
+    inventory_value = sum((item.total_value or 0) for item in priced_equipment)
+    catalog_missing_prices = CatalogItem.objects.filter(archived=False, unit_price__isnull=True).count()
+    catalog_review_prices = CatalogItem.objects.filter(archived=False, unit_price__isnull=False, price_needs_review=True).count()
+
     context.update({
         "equipment_total": Equipment.objects.filter(archived=False).count(),
         "employees_total": Employee.objects.filter(archived=False).count(),
@@ -283,6 +303,10 @@ def dashboard(request):
         "acts_total": Act.objects.count(),
         "documents_total": DocumentRecord.objects.filter(trashed_at__isnull=True).count(),
         "contracts_total": Contract.objects.filter(archived=False).count(),
+        "inventory_value": inventory_value,
+        "catalog_total": CatalogItem.objects.filter(archived=False).count(),
+        "catalog_missing_prices": catalog_missing_prices,
+        "catalog_review_prices": catalog_review_prices,
         "dashboard_reminders": dashboard_reminders,
         "locations_total": Location.objects.filter(archived=False).count(),
         "warehouse_employee_count": Equipment.objects.filter(
@@ -376,7 +400,7 @@ def employee_detail(request, pk):
         .order_by("-created_at", "-pk")
     )[:100]
     equipment = list(
-        obj.equipment.filter(archived=False).select_related("category", "owner")
+        obj.equipment.filter(archived=False).select_related("category", "catalog_item", "owner")
     )
     documented_equipment_ids = _current_assignment_document_status(obj, equipment)
     for item in equipment:
@@ -391,7 +415,7 @@ def employee_detail(request, pk):
                 responsible_employee__isnull=True,
                 usage_status=Equipment.UsageStatus.OBJECT,
                 freeform_location__icontains=surname,
-            ).select_related("category", "owner", "location")
+            ).select_related("category", "catalog_item", "owner", "location")
         )
     return render(request, "inventory/employee_detail.html", {
         "object": obj,
@@ -544,22 +568,12 @@ def _employee_equipment_act_workflow(request, pk, operation):
     if form.is_valid():
         selected = list(form.cleaned_data["equipment"])
         act_date = form.cleaned_data["act_date"]
-        stream = build_employee_transfer_docx(
-            employee=employee,
-            equipment=selected,
-            act_date=act_date,
-            city=form.cleaned_data["city"],
-            organization_name=form.cleaned_data["organization_name"],
-            representative_position=form.cleaned_data["representative_position"],
-            representative_name=form.cleaned_data["representative_name"],
-            act_type=operation,
-        )
         filename = _safe_act_filename(employee, act_date, operation)
         notes = form.cleaned_data.get("notes", "").strip()
 
         with transaction.atomic():
             locked = list(
-                Equipment.objects.select_for_update().select_related("owner")
+                Equipment.objects.select_for_update().select_related("owner", "catalog_item", "category")
                 .filter(pk__in=[item.pk for item in selected])
                 .order_by("pk")
             )
@@ -579,6 +593,26 @@ def _employee_equipment_act_workflow(request, pk, operation):
                 messages.error(request, f"Оборудование уже изменилось: {invalid[0]}. Обновите страницу.")
                 return redirect(request.path)
 
+            price_overrides = (
+                return_price_overrides(employee, locked, act_date)
+                if operation == "return"
+                else {item.pk: item.unit_price for item in locked if item.unit_price is not None}
+            )
+            # Generate the document from the same locked rows and the same explicit
+            # price map that will be written into ActItem snapshots. This prevents
+            # a concurrent catalog price edit from making the DOCX and DB history differ.
+            stream = build_employee_transfer_docx(
+                employee=employee,
+                equipment=locked,
+                act_date=act_date,
+                city=form.cleaned_data["city"],
+                organization_name=form.cleaned_data["organization_name"],
+                representative_position=form.cleaned_data["representative_position"],
+                representative_name=form.cleaned_data["representative_name"],
+                act_type=operation,
+                price_overrides=price_overrides,
+            )
+
             act = Act(
                 act_type=Act.ActType.ISSUE if operation == "issue" else Act.ActType.RETURN,
                 act_date=act_date,
@@ -593,6 +627,7 @@ def _employee_equipment_act_workflow(request, pk, operation):
             act.document.save(filename, ContentFile(stream.getvalue()), save=False)
             act.save()
             act.equipment.set(locked)
+            snapshot_act_items(act, locked, price_overrides=price_overrides)
 
             for item in locked:
                 old_employee = item.responsible_employee
@@ -665,22 +700,12 @@ def employee_generate_act(request, pk, act_type):
     if form.is_valid():
         equipment = list(form.cleaned_data["equipment"])
         act_date = form.cleaned_data["act_date"]
-        stream = build_employee_transfer_docx(
-            employee=employee,
-            equipment=equipment,
-            act_date=act_date,
-            city=form.cleaned_data["city"],
-            organization_name=form.cleaned_data["organization_name"],
-            representative_position=form.cleaned_data["representative_position"],
-            representative_name=form.cleaned_data["representative_name"],
-            act_type=act_type,
-        )
         filename = _safe_act_filename(employee, act_date, act_type)
 
         if act_type == "issue":
             with transaction.atomic():
                 locked = list(
-                    Equipment.objects.select_for_update().filter(
+                    Equipment.objects.select_for_update().select_related("catalog_item", "category", "owner").filter(
                         pk__in=[item.pk for item in equipment],
                         archived=False,
                         responsible_employee=employee,
@@ -689,6 +714,19 @@ def employee_generate_act(request, pk, act_type):
                 if len(locked) != len(equipment):
                     messages.error(request, "Часть оборудования больше не закреплена за сотрудником. Обновите страницу.")
                     return redirect(request.path)
+
+                price_overrides = {item.pk: item.unit_price for item in locked if item.unit_price is not None}
+                stream = build_employee_transfer_docx(
+                    employee=employee,
+                    equipment=locked,
+                    act_date=act_date,
+                    city=form.cleaned_data["city"],
+                    organization_name=form.cleaned_data["organization_name"],
+                    representative_position=form.cleaned_data["representative_position"],
+                    representative_name=form.cleaned_data["representative_name"],
+                    act_type=act_type,
+                    price_overrides=price_overrides,
+                )
 
                 act = Act(
                     act_type=Act.ActType.ISSUE,
@@ -700,6 +738,7 @@ def employee_generate_act(request, pk, act_type):
                 act.document.save(filename, ContentFile(stream.getvalue()), save=False)
                 act.save()
                 act.equipment.set(locked)
+                snapshot_act_items(act, locked, price_overrides=price_overrides)
 
                 linked = 0
                 for item in locked:
@@ -728,6 +767,18 @@ def employee_generate_act(request, pk, act_type):
             )
             return redirect(f"{act.get_absolute_url()}?download=1")
 
+        price_overrides = return_price_overrides(employee, equipment, act_date)
+        stream = build_employee_transfer_docx(
+            employee=employee,
+            equipment=equipment,
+            act_date=act_date,
+            city=form.cleaned_data["city"],
+            organization_name=form.cleaned_data["organization_name"],
+            representative_position=form.cleaned_data["representative_position"],
+            representative_name=form.cleaned_data["representative_name"],
+            act_type=act_type,
+            price_overrides=price_overrides,
+        )
         kind = "возврата"
         safe_employee = short_person_name(employee.full_name).replace(" ", "-").replace(".", "")
         download_name = f"Акт-{kind}-{safe_employee}-{act_date:%Y-%m-%d}.docx"
@@ -801,7 +852,7 @@ def location_detail(request, pk):
     equipment = Equipment.objects.filter(
         Q(location=obj) | Q(cabinet__location=obj) | Q(responsible_employee_id__in=all_employee_ids),
         archived=False,
-).select_related("category", "owner", "responsible_employee", "room", "cabinet", "location").distinct()
+).select_related("category", "catalog_item", "owner", "responsible_employee", "room", "cabinet", "location").distinct()
     q = request.GET.get("q", "").strip()
     group = request.GET.get("group", "")
     status = request.GET.get("status", "")
@@ -827,7 +878,7 @@ def location_detail(request, pk):
     employee_cards = []
     incomplete_count = 0
     for employee in employees_qs:
-        assigned = list(employee.equipment.filter(archived=False).select_related("category", "owner"))
+        assigned = list(employee.equipment.filter(archived=False).select_related("category", "catalog_item", "owner"))
         set_state = _employee_equipment_set(assigned, [])
         if set_state["requirements"] and not set_state["complete"]:
             incomplete_count += 1
@@ -930,7 +981,7 @@ def warehouse(request):
     qs = Equipment.objects.filter(
         archived=False, responsible_employee__isnull=True,
         usage_status__in=[Equipment.UsageStatus.STOCK, Equipment.UsageStatus.RESERVE],
-    ).select_related("category", "owner", "location", "room", "cabinet")
+    ).select_related("category", "catalog_item", "owner", "location", "room", "cabinet")
     q = request.GET.get("q", "").strip(); owner = request.GET.get("owner", "")
     category = request.GET.get("category", ""); group = request.GET.get("group", "")
     if q:
@@ -984,7 +1035,7 @@ def cabinet_list(request):
 @login_required
 def cabinet_detail(request, pk):
     obj = get_object_or_404(Cabinet.objects.select_related("location__organization", "room"), pk=pk)
-    return render(request, "inventory/cabinet_detail.html", {"object": obj, "equipment": obj.equipment.filter(archived=False).select_related("category", "owner", "responsible_employee")})
+    return render(request, "inventory/cabinet_detail.html", {"object": obj, "equipment": obj.equipment.filter(archived=False).select_related("category", "catalog_item", "owner", "responsible_employee")})
 
 
 @login_required
@@ -1029,6 +1080,126 @@ def category_form(request, pk=None):
 
 
 @login_required
+def catalog_list(request):
+    qs = CatalogItem.objects.filter(archived=False).select_related("category").annotate(
+        equipment_count=Count("equipment", filter=Q(equipment__archived=False), distinct=True),
+        unit_count=Sum("equipment__quantity", filter=Q(equipment__archived=False)),
+    )
+    q = request.GET.get("q", "").strip()
+    category = request.GET.get("category", "")
+    price_state = request.GET.get("price", "")
+    if q:
+        qs = qs.filter(
+            Q(name__icontains=q) | Q(manufacturer__icontains=q) | Q(model__icontains=q) | Q(sku__icontains=q)
+        )
+    if category:
+        qs = qs.filter(category_id=category)
+    if price_state == "missing":
+        qs = qs.filter(unit_price__isnull=True)
+    elif price_state == "review":
+        qs = qs.filter(unit_price__isnull=False, price_needs_review=True)
+    elif price_state == "ok":
+        qs = qs.filter(unit_price__isnull=False, price_needs_review=False)
+    qs = qs.order_by("category__name", "manufacturer", "model", "name")
+
+    objects = list(qs)
+    total_value = 0
+    missing_price_count = 0
+    review_count = 0
+    for item in objects:
+        item.unit_count = item.unit_count or 0
+        item.inventory_value = item.unit_price * item.unit_count if item.unit_price is not None else None
+        if item.inventory_value is not None:
+            total_value += item.inventory_value
+        if item.unit_price is None:
+            missing_price_count += 1
+        elif item.price_needs_review:
+            review_count += 1
+
+    return render(request, "inventory/catalog_list.html", {
+        "objects": objects,
+        "q": q,
+        "categories": Category.objects.filter(archived=False),
+        "selected_category": category,
+        "selected_price": price_state,
+        "total_value": total_value,
+        "missing_price_count": missing_price_count,
+        "review_count": review_count,
+    })
+
+
+@login_required
+def catalog_detail(request, pk):
+    obj = get_object_or_404(CatalogItem.objects.select_related("category"), pk=pk)
+    equipment = obj.equipment.filter(archived=False).select_related(
+        "owner", "responsible_employee", "location", "room", "cabinet", "category", "catalog_item"
+    ).order_by("internal_code", "pk")
+    unit_count = sum(item.quantity for item in equipment)
+    inventory_value = obj.unit_price * unit_count if obj.unit_price is not None else None
+    return render(request, "inventory/catalog_detail.html", {
+        "object": obj,
+        "equipment": equipment,
+        "price_history": obj.price_history.select_related("changed_by").all(),
+        "unit_count": unit_count,
+        "inventory_value": inventory_value,
+    })
+
+
+@login_required
+def catalog_form(request, pk=None):
+    if not request.user.is_staff:
+        raise PermissionDenied
+    obj = get_object_or_404(CatalogItem, pk=pk) if pk else None
+    old_price = obj.unit_price if obj else None
+    form = CatalogItemForm(request.POST or None, instance=obj)
+    if form.is_valid():
+        catalog = form.save(commit=False)
+        if catalog.unit_price is not None:
+            catalog.price_needs_review = False
+        catalog.save()
+        form.save_m2m()
+
+        if catalog.unit_price is not None and old_price != catalog.unit_price:
+            CatalogPriceHistory.objects.create(
+                catalog_item=catalog,
+                unit_price=catalog.unit_price,
+                effective_date=timezone.localdate(),
+                source="Ручное изменение в FOX Inventory",
+                changed_by=request.user,
+            )
+
+        catalog.equipment.update(
+            category=catalog.category,
+            accounting_group=catalog.accounting_group,
+            name=catalog.name,
+            manufacturer=catalog.manufacturer,
+            model=catalog.model,
+        )
+        messages.success(request, "Номенклатура сохранена. Цена применяется ко всем связанным экземплярам.")
+        return redirect(catalog)
+    return render(request, "inventory/model_form.html", {
+        "form": form,
+        "title": "Номенклатура",
+        "cancel_url": obj.get_absolute_url() if obj else reverse("catalog_list"),
+    })
+
+
+@login_required
+@require_POST
+def catalog_confirm_price(request, pk):
+    if not request.user.is_staff:
+        raise PermissionDenied
+    obj = get_object_or_404(CatalogItem, pk=pk)
+    if obj.unit_price is None:
+        messages.error(request, "Сначала укажите учётную цену.")
+    else:
+        obj.price_needs_review = False
+        obj.save(update_fields=["price_needs_review", "updated_at"])
+        messages.success(request, "Текущая цена подтверждена.")
+    return redirect(obj)
+
+
+@login_required
 def archive_list(request):
     employees = Employee.objects.filter(archived=True).select_related("organization").annotate(
         equipment_count=Count("equipment", distinct=True)
@@ -1049,7 +1220,7 @@ def archive_list(request):
 
 @login_required
 def equipment_list(request):
-    qs = Equipment.objects.select_related("category", "owner", "responsible_employee", "location", "room", "cabinet").filter(archived=False)
+    qs = Equipment.objects.select_related("category", "catalog_item", "owner", "responsible_employee", "location", "room", "cabinet").filter(archived=False)
     q = request.GET.get("q", "").strip(); owner = request.GET.get("owner", ""); category = request.GET.get("category", "")
     status = request.GET.get("status", ""); group = request.GET.get("group", ""); location = request.GET.get("location", "")
     if q:
@@ -1081,7 +1252,7 @@ def equipment_list(request):
 
 @login_required
 def equipment_detail(request, pk):
-    obj = get_object_or_404(Equipment.objects.select_related("category", "owner", "responsible_employee__organization", "location", "room", "cabinet"), pk=pk)
+    obj = get_object_or_404(Equipment.objects.select_related("category", "catalog_item", "owner", "responsible_employee__organization", "location", "room", "cabinet"), pk=pk)
     back_url = _remember_back_url(request, "equipment_list_back_url", reverse("equipment_list"))
     loans = obj.loans.select_related("borrower", "responsible_employee").all()
     return render(request, "inventory/equipment_detail.html", {
@@ -1116,6 +1287,16 @@ def equipment_form(request, pk=None):
     form = EquipmentForm(request.POST or None, instance=obj, initial=initial)
     if form.is_valid():
         saved = form.save()
+        if saved.catalog_item_id is None:
+            saved.catalog_item = ensure_catalog_item(
+                category=saved.category,
+                accounting_group=saved.accounting_group,
+                name=saved.name,
+                manufacturer=saved.manufacturer,
+                model=saved.model,
+                changed_by=request.user,
+            )
+            saved.save()
         EquipmentMovement.objects.create(
             equipment=saved,
             movement_type=EquipmentMovement.MovementType.CREATED if not obj else EquipmentMovement.MovementType.EDITED,
@@ -1307,9 +1488,22 @@ def act_list(request):
 
 @login_required
 def act_detail(request, pk):
-    obj = get_object_or_404(Act.objects.select_related("employee", "from_organization", "to_organization").prefetch_related("equipment"), pk=pk)
+    obj = get_object_or_404(
+        Act.objects.select_related("employee", "from_organization", "to_organization")
+        .prefetch_related("equipment", "items__equipment"),
+        pk=pk,
+    )
+    act_items = list(obj.items.all())
+    priced_items = [item for item in act_items if item.line_total is not None]
+    act_known_total = sum((item.line_total for item in priced_items), Decimal("0.00"))
+    act_missing_price_count = len(act_items) - len(priced_items)
+    act_total = act_known_total if act_items and not act_missing_price_count else None
     return render(request, "inventory/act_detail.html", {
         "object": obj,
+        "act_items": act_items,
+        "act_total": act_total,
+        "act_known_total": act_known_total,
+        "act_missing_price_count": act_missing_price_count,
         "movements": _visible_movements(obj.movements.select_related("equipment", "from_employee", "to_employee")),
         "auto_download": request.GET.get("download") == "1",
     })
@@ -1404,6 +1598,14 @@ def act_form(request, pk=None):
     if form.is_valid():
         with transaction.atomic():
             act = form.save()
+            if obj is None:
+                act_equipment = list(act.equipment.select_related("catalog_item", "category").all())
+                price_overrides = (
+                    return_price_overrides(act.employee, act_equipment, act.act_date)
+                    if act.act_type == Act.ActType.RETURN and act.employee
+                    else {}
+                )
+                snapshot_act_items(act, act_equipment, price_overrides=price_overrides)
             if form.cleaned_data.get("apply_to_current_state") and act.act_type in {Act.ActType.ISSUE, Act.ActType.RETURN} and act.employee:
                 for equipment in act.equipment.all():
                     old_employee = equipment.responsible_employee
@@ -1429,8 +1631,21 @@ def act_form(request, pk=None):
 
 
 def public_act(request, token):
-    obj = get_object_or_404(Act.objects.select_related("employee").prefetch_related("equipment"), public_token=token, public_enabled=True)
-    return render(request, "inventory/public_act.html", {"object": obj})
+    obj = get_object_or_404(
+        Act.objects.select_related("employee").prefetch_related("equipment", "items__equipment"),
+        public_token=token,
+        public_enabled=True,
+    )
+    act_items = list(obj.items.all())
+    priced_items = [item for item in act_items if item.line_total is not None]
+    known_total = sum((item.line_total for item in priced_items), Decimal("0.00"))
+    missing_price_count = len(act_items) - len(priced_items)
+    return render(request, "inventory/public_act.html", {
+        "object": obj,
+        "act_items": act_items,
+        "act_known_total": known_total,
+        "act_missing_price_count": missing_price_count,
+    })
 
 
 def public_act_file(request, token):
@@ -1446,7 +1661,7 @@ def public_act_file(request, token):
 @login_required
 def equipment_preview(request, pk):
     obj = get_object_or_404(
-        Equipment.objects.select_related("category", "owner", "responsible_employee", "location", "room", "cabinet"), pk=pk
+        Equipment.objects.select_related("category", "catalog_item", "owner", "responsible_employee", "location", "room", "cabinet"), pk=pk
     )
     return render(request, "inventory/_equipment_preview.html", {"object": obj})
 
@@ -1454,12 +1669,17 @@ def equipment_preview(request, pk):
 @login_required
 def global_search(request):
     q = request.GET.get("q", "").strip()
-    equipment = employees = locations = rooms = acts = contracts = documents = []
+    equipment = catalog = employees = locations = rooms = acts = contracts = documents = []
     if q:
         equipment = Equipment.objects.filter(archived=False).filter(
             Q(internal_code__icontains=q) | Q(name__icontains=q) | Q(model__icontains=q)
+            | Q(catalog_item__name__icontains=q) | Q(catalog_item__manufacturer__icontains=q)
+            | Q(catalog_item__model__icontains=q) | Q(catalog_item__sku__icontains=q)
             | Q(serial_number__icontains=q) | Q(mac_address__icontains=q) | Q(hostname__icontains=q) | Q(network_address__icontains=q)
-        ).select_related("category", "owner", "responsible_employee")[:20]
+        ).select_related("category", "catalog_item", "owner", "responsible_employee")[:20]
+        catalog = CatalogItem.objects.filter(archived=False).filter(
+            Q(name__icontains=q) | Q(manufacturer__icontains=q) | Q(model__icontains=q) | Q(sku__icontains=q)
+        ).select_related("category")[:10]
         employees = Employee.objects.filter(archived=False).filter(
             Q(full_name__icontains=q) | Q(position__icontains=q) | Q(phone__icontains=q)
         ).select_related("organization", "workplace_location")[:20]
@@ -1478,7 +1698,7 @@ def global_search(request):
             | Q(counterparty__name__icontains=q) | Q(contract__title__icontains=q)
         ).select_related("organization", "document_type", "counterparty", "contract")[:10]
     return render(request, "inventory/search_results.html", {
-        "q": q, "equipment": equipment, "employees": employees, "locations": locations, "rooms": rooms, "acts": acts,
+        "q": q, "equipment": equipment, "catalog": catalog, "employees": employees, "locations": locations, "rooms": rooms, "acts": acts,
         "contracts": contracts, "documents": documents,
     })
 

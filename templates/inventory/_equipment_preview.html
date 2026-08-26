@@ -1,6 +1,8 @@
-<div class="preview-card">
-  <div class="preview-title"><div><span class="group-badge {{ object.accounting_group }}">{{ object.get_accounting_group_display }}</span><h2>{{ object.name }}</h2><p>{{ object.manufacturer }} {{ object.model }}</p></div><code>{{ object.internal_code|default:"без кода" }}</code></div>
+{% load inventory_ui %}<div class="preview-card">
+  <div class="preview-title"><div><span class="group-badge {{ object.accounting_group }}">{{ object.get_accounting_group_display }}</span><h2>{{ object.display_name }}</h2><p>{{ object.display_manufacturer }} {{ object.display_model }}</p></div><code>{{ object.internal_code|default:"без кода" }}</code></div>
   <dl class="preview-details">
+    <dt>Номенклатура</dt><dd>{% if object.catalog_item %}<a href="{{ object.catalog_item.get_absolute_url }}">{{ object.catalog_item.sku|default:object.catalog_item.name }}</a>{% else %}—{% endif %}</dd>
+    <dt>Учётная цена</dt><dd><b>{{ object.unit_price|money }}</b>{% if object.catalog_item.price_needs_review %} <span class="badge warn">проверить</span>{% endif %}</dd>
     <dt>Серийный номер</dt><dd>{{ object.serial_number|default:"—" }}</dd><dt>MAC-адрес</dt><dd>{{ object.mac_address|default:"—" }}</dd><dt>Владелец</dt><dd>{{ object.owner }}</dd>
     <dt>Статус</dt><dd><span class="badge">{{ object.get_usage_status_display }}</span></dd><dt>Состояние</dt><dd>{{ object.get_condition_display }}</dd>
     <dt>Сотрудник</dt><dd>{% if object.responsible_employee %}<a href="{{ object.responsible_employee.get_absolute_url }}">{{ object.responsible_employee }}</a>{% else %}—{% endif %}</dd>

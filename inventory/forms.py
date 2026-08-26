@@ -5,7 +5,8 @@ from django.contrib.auth.forms import PasswordChangeForm
 from django.core.exceptions import ValidationError
 from django.db.models import Q
 from django.utils import timezone
-from .models import Act, Cabinet, Category, Employee, Equipment, EquipmentLoan, Location, Organization, RepairRecord, Room
+from .models import Act, Cabinet, CatalogItem, Category, Employee, Equipment, EquipmentLoan, Location, Organization, RepairRecord, Room
+from .catalog import extract_catalog_sku, make_catalog_identity_key
 from .validators import normalize_mac_address
 
 
@@ -139,17 +140,74 @@ class CategoryForm(StyledModelForm):
         return self.cleaned_data["code"].strip().upper()
 
 
+class CatalogItemForm(StyledModelForm):
+    class Meta:
+        model = CatalogItem
+        fields = [
+            "category", "accounting_group", "name", "manufacturer", "model", "sku",
+            "unit_price", "price_needs_review", "notes",
+        ]
+        widgets = {"notes": forms.Textarea(attrs={"rows": 3})}
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["price_needs_review"].help_text = (
+            "Отметка нужна только для автоматически выбранной цены. "
+            "При ручном сохранении цены подтверждение снимается автоматически."
+        )
+
+    def clean(self):
+        data = super().clean()
+        category = data.get("category")
+        if not category:
+            return data
+        if (
+            self.instance
+            and self.instance.pk
+            and self.instance.category_id != category.pk
+            and self.instance.equipment.exists()
+        ):
+            self.add_error(
+                "category",
+                "Нельзя менять категорию номенклатуры, к которой уже привязаны экземпляры. "
+                "Создайте отдельную номенклатуру и перенесите нужные карточки.",
+            )
+            return data
+        sku = (data.get("sku") or "").strip() or extract_catalog_sku(data.get("model", ""))
+        data["sku"] = sku
+        identity = make_catalog_identity_key(
+            category.code,
+            data.get("manufacturer", ""),
+            data.get("model", ""),
+            sku,
+        )
+        duplicate = CatalogItem.objects.filter(identity_key=identity)
+        if self.instance and self.instance.pk:
+            duplicate = duplicate.exclude(pk=self.instance.pk)
+        if duplicate.exists():
+            raise ValidationError("Такая номенклатура уже существует. Откройте существующую карточку.")
+        return data
+
+
 class EquipmentForm(StyledModelForm):
     network_password = forms.CharField(label="Пароль", required=False, widget=forms.PasswordInput(render_value=False), help_text="Оставьте пустым, чтобы не менять пароль.")
 
     class Meta:
         model = Equipment
         fields = [
-            "category", "accounting_group", "internal_code", "name", "manufacturer", "model", "serial_number", "mac_address", "hostname",
+            "catalog_item", "category", "accounting_group", "internal_code", "name", "manufacturer", "model", "serial_number", "mac_address", "hostname",
             "owner", "responsible_employee", "location", "room", "cabinet", "freeform_location", "quantity",
             "usage_status", "condition", "notes", "network_address", "network_username",
         ]
         widgets = {"notes": forms.Textarea(attrs={"rows": 4})}
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["catalog_item"].queryset = CatalogItem.objects.filter(archived=False).select_related("category")
+        self.fields["catalog_item"].empty_label = "Выберите номенклатуру или заполните данные вручную"
+        self.fields["catalog_item"].help_text = (
+            "Для одинаковых устройств выбирайте одну номенклатуру: название, модель и цена будут едиными."
+        )
 
     def clean_mac_address(self):
         return normalize_mac_address(self.cleaned_data.get("mac_address", ""))
@@ -172,6 +230,13 @@ class EquipmentForm(StyledModelForm):
             data["location"] = cabinet.location
         if cabinet and cabinet.room_id and not room:
             data["room"] = cabinet.room
+        catalog_item = data.get("catalog_item")
+        if catalog_item:
+            data["category"] = catalog_item.category
+            data["accounting_group"] = catalog_item.accounting_group
+            data["name"] = catalog_item.name
+            data["manufacturer"] = catalog_item.manufacturer
+            data["model"] = catalog_item.model
         category = data.get("category")
         if category and category.tracking_mode == Category.TrackingMode.UNIT:
             data["quantity"] = 1
@@ -238,7 +303,7 @@ class RoomEquipmentAssignForm(forms.Form):
                 usage_status__in=[Equipment.UsageStatus.STOCK, Equipment.UsageStatus.RESERVE, Equipment.UsageStatus.OBJECT],
             ).filter(
                 Q(location__isnull=True) | Q(location=room.location, room__isnull=True)
-            ).select_related("category", "owner", "location").order_by("category__name", "internal_code", "name")
+            ).select_related("category", "catalog_item", "owner", "location").order_by("category__name", "internal_code", "name")
 
 
 class LoanForm(StyledModelForm):
@@ -274,9 +339,16 @@ class ActForm(StyledModelForm):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.fields["employee"].queryset = Employee.objects.select_related("organization").all()
-        self.fields["equipment"].queryset = Equipment.objects.filter(archived=False).select_related("category", "owner")
-        if self.instance and self.instance.pk and not self.is_bound:
-            self.fields["apply_to_current_state"].initial = False
+        self.fields["equipment"].queryset = Equipment.objects.filter(archived=False).select_related("category", "catalog_item", "owner")
+        if self.instance and self.instance.pk:
+            if not self.is_bound:
+                self.fields["apply_to_current_state"].initial = False
+            if self.instance.items.exists():
+                self.fields["equipment"].disabled = True
+                self.fields["equipment"].help_text = (
+                    "Состав нового акта зафиксирован историческим снимком и не меняется при редактировании. "
+                    "Для другой комплектации создайте новый акт."
+                )
 
 
 class RepairForm(StyledModelForm):
@@ -332,13 +404,13 @@ class EmployeeEquipmentOperationForm(forms.Form):
             queryset = Equipment.objects.filter(
                 archived=False,
                 responsible_employee=employee,
-            ).select_related("category", "owner").order_by("category__name", "internal_code", "name")
+            ).select_related("category", "catalog_item", "owner").order_by("category__name", "internal_code", "name")
         else:
             queryset = Equipment.objects.filter(
                 archived=False,
                 responsible_employee__isnull=True,
                 usage_status__in=[Equipment.UsageStatus.STOCK, Equipment.UsageStatus.RESERVE],
-            ).select_related("category", "owner").order_by("category__name", "internal_code", "name")
+            ).select_related("category", "catalog_item", "owner").order_by("category__name", "internal_code", "name")
         self.fields["equipment"].queryset = queryset
 
 
@@ -380,7 +452,7 @@ class EmployeeActDocumentForm(forms.Form):
         queryset = Equipment.objects.filter(
             archived=False,
             responsible_employee=employee,
-        ).select_related("category", "owner").order_by("category__name", "internal_code", "name")
+        ).select_related("category", "catalog_item", "owner").order_by("category__name", "internal_code", "name")
         self.fields["equipment"].queryset = queryset
         if not self.is_bound:
             self.initial["equipment"] = list(queryset.values_list("pk", flat=True))
@@ -437,13 +509,13 @@ class EmployeeEquipmentActWorkflowForm(forms.Form):
             queryset = Equipment.objects.filter(
                 archived=False,
                 responsible_employee=employee,
-            ).select_related("category", "owner").order_by("category__name", "internal_code", "name")
+            ).select_related("category", "catalog_item", "owner").order_by("category__name", "internal_code", "name")
         else:
             queryset = Equipment.objects.filter(
                 archived=False,
                 responsible_employee__isnull=True,
                 usage_status__in=[Equipment.UsageStatus.STOCK, Equipment.UsageStatus.RESERVE],
-            ).select_related("category", "owner").order_by("category__name", "internal_code", "name")
+            ).select_related("category", "catalog_item", "owner").order_by("category__name", "internal_code", "name")
         self.fields["equipment"].queryset = queryset
 
         if not self.is_bound and employee is not None:

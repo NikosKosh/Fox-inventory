@@ -12,6 +12,8 @@ The application is designed for deployment on Ubuntu Server with Docker Compose.
 - Warehouse view for available equipment.
 - Facilities with rooms, employees, equipment, and network cabinets.
 - Individual equipment cards with serial numbers, MAC addresses, internal codes, status, condition, location, credentials, and notes.
+- Shared product catalog (nomenclature) with one accounting price per model, price history, and automatic linkage of identical physical units.
+- Price snapshots in new transfer acts, including per-unit price, line total, and immutable historical values.
 - Equipment issue and return workflows with or without a transfer document.
 - DOCX transfer document generation and signed PDF attachment storage.
 - Per-organization defaults for document city, legal name, and issue/return representatives; every generated field remains editable.

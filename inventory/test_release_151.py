@@ -1,7 +1,7 @@
 from openpyxl import load_workbook
 from django.test import TestCase
 
-from .models import Cabinet, Category, Employee, Equipment, Location, Organization, Room
+from .models import Cabinet, CatalogItem, Category, Employee, Equipment, Location, Organization, Room
 from .services import equipment_export_workbook
 
 
@@ -10,6 +10,14 @@ class Release151ExportTests(TestCase):
         self.owner = Organization.objects.create(name="ООО Владелец 151", prefix="R151")
         self.employee_org = Organization.objects.create(name="ООО Работодатель 151", prefix="E151")
         self.category = Category.objects.create(name="Ноутбук 151", code="N151")
+        self.catalog = CatalogItem.objects.create(
+            category=self.category,
+            accounting_group=Equipment.AccountingGroup.EMPLOYEE,
+            name="Ноутбук",
+            manufacturer="Lenovo",
+            model="ThinkPad T14",
+            unit_price="75000.00",
+        )
         self.location = Location.objects.create(
             organization=self.owner,
             address="г. Ростов-на-Дону, ул. Тестовая, 151",
@@ -25,6 +33,7 @@ class Release151ExportTests(TestCase):
             internal_code="R151-N151-001",
             accounting_group=Equipment.AccountingGroup.EMPLOYEE,
             category=self.category,
+            catalog_item=self.catalog,
             name="Ноутбук",
             manufacturer="Lenovo",
             model="ThinkPad T14",
@@ -58,12 +67,13 @@ class Release151ExportTests(TestCase):
         self.assertEqual(ws["A4"].value, "1\nПОЗИЦИЙ")
         self.assertEqual(ws["C4"].value, "1\nЕДИНИЦ")
         self.assertEqual(ws.freeze_panes, "A9")
-        self.assertEqual(ws.auto_filter.ref, "A8:J9")
+        self.assertEqual(ws.auto_filter.ref, "A8:L9")
 
-        headers = [ws.cell(row=8, column=column).value for column in range(1, 11)]
+        headers = [ws.cell(row=8, column=column).value for column in range(1, 13)]
         self.assertEqual(headers, [
             "Код", "Контур", "Категория", "Оборудование", "Модель / серийный №",
             "Владелец", "Где находится / у кого", "Статус", "Состояние", "Кол-во",
+            "Цена, ₽", "Стоимость, ₽",
         ])
         self.assertNotIn("Комментарий", headers)
         self.assertNotIn("MAC-адрес", headers)
@@ -73,7 +83,9 @@ class Release151ExportTests(TestCase):
         self.assertIn("Кабинет 151", ws["G9"].value)
         self.assertIn("Шкаф 151", ws["G9"].value)
         self.assertIn("Стол 15", ws["G9"].value)
-        self.assertNotIn("SERVICE_MARKER", " ".join(str(ws.cell(row=9, column=col).value or "") for col in range(1, 11)))
+        self.assertNotIn("SERVICE_MARKER", " ".join(str(ws.cell(row=9, column=col).value or "") for col in range(1, 13)))
+        self.assertEqual(ws["K9"].value, 75000)
+        self.assertEqual(ws["L9"].value, 75000)
 
         tech = wb["Технические данные"]
         self.assertEqual(tech["G5"].value, "AA:BB:CC:DD:EE:15")

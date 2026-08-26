@@ -55,3 +55,8 @@ def sort_chip(context, field, label, default_field="", default_direction="asc"):
         label,
         indicator,
     )
+
+@register.filter
+def money(value):
+    from inventory.catalog import format_money
+    return format_money(value)
