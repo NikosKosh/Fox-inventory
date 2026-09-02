@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.7.0 — 2026-09-02
+
+- Organization Workspace: organization overview with objects, employees, equipment, materials and projects.
+- Projects and independent stages linked to an organization and object.
+- Materials/consumables/components with units of measure and quantitative stock accounting.
+- Per-organization default warehouses and immutable material movement history.
+- Atomic project posting: materials are immediately consumed; equipment is installed on the object and remains an asset.
+- Historical price snapshots for project costs.
+- Project/stage origin shown on installed equipment.
+- User-friendly project operation picker with stock validation and live cost preview.
+- Safe 0018 migration; existing equipment remains equipment by default.
+- Production verification command `check_workspace_170` and `scripts/verify-1.7.0.sh`.
+- Exact before/after equipment state snapshots for safe project-operation rollback.
+- Completed projects and stages are read-only until explicit staff reopen.
+- Stock/reserve equipment is no longer incorrectly reported as “unplaced”.
+- Safe guided conversion of legacy stock cards (boxes, conduit, consumables) into quantitative material stock with immutable conversion history; real individual assets block conversion.
+
 ## 1.6.0 — 2026-08-26
 
 - Добавлен справочник номенклатуры: одна модель товара теперь объединяет все физические экземпляры с разными внутренними номерами, серийниками и MAC-адресами.

@@ -1,4 +1,5 @@
 import secrets
+from decimal import Decimal
 from django.conf import settings
 from django.core.validators import MinValueValidator
 from django.db import models, transaction
@@ -71,6 +72,9 @@ class Organization(TimeStampedModel):
     def __str__(self):
         return self.short_name or self.name
 
+    def get_absolute_url(self):
+        return reverse("organization_detail", args=[self.pk])
+
 
 class Employee(TimeStampedModel):
     full_name = models.CharField("ФИО", max_length=255)
@@ -112,13 +116,17 @@ class Location(TimeStampedModel):
     organization = models.ForeignKey(Organization, verbose_name="Организация", on_delete=models.PROTECT, related_name="locations")
     address = models.CharField("Адрес", max_length=500)
     label = models.CharField("Краткое название", max_length=150, blank=True, help_text="Например: Главный офис")
+    responsible_employee = models.ForeignKey(
+        Employee, verbose_name="Ответственный за объект", on_delete=models.PROTECT,
+        null=True, blank=True, related_name="managed_locations",
+    )
     archived = models.BooleanField("В архиве", default=False)
 
     class Meta:
         ordering = ["organization__name", "address"]
         constraints = [models.UniqueConstraint(fields=["organization", "address"], name="uniq_org_address")]
-        verbose_name = "адрес"
-        verbose_name_plural = "адреса"
+        verbose_name = "объект"
+        verbose_name_plural = "объекты"
 
     def __str__(self):
         return f"{self.organization}: {self.label or self.address}"
@@ -196,6 +204,21 @@ class Category(TimeStampedModel):
 
 
 class CatalogItem(TimeStampedModel):
+    class InventoryKind(models.TextChoices):
+        EQUIPMENT = "equipment", "Инвентарное оборудование"
+        MATERIAL = "material", "Материал"
+        CONSUMABLE = "consumable", "Расходник"
+        COMPONENT = "component", "Запчасть / компонент"
+
+    class UnitOfMeasure(models.TextChoices):
+        PCS = "pcs", "шт."
+        METER = "m", "м"
+        KG = "kg", "кг"
+        LITER = "l", "л"
+        SET = "set", "компл."
+        PACK = "pack", "уп."
+        ROLL = "roll", "рулон"
+
     category = models.ForeignKey(Category, verbose_name="Категория", on_delete=models.PROTECT, related_name="catalog_items")
     accounting_group = models.CharField(
         "Контур учёта",
@@ -209,6 +232,8 @@ class CatalogItem(TimeStampedModel):
     model = models.CharField("Модель / конфигурация", max_length=180, blank=True)
     sku = models.CharField("Артикул / код модели", max_length=80, blank=True, db_index=True)
     identity_key = models.CharField(max_length=600, unique=True, editable=False)
+    inventory_kind = models.CharField("Тип учёта", max_length=20, choices=InventoryKind.choices, default=InventoryKind.EQUIPMENT, db_index=True)
+    unit_of_measure = models.CharField("Единица измерения", max_length=12, choices=UnitOfMeasure.choices, default=UnitOfMeasure.PCS)
     unit_price = models.DecimalField("Учётная цена, ₽", max_digits=14, decimal_places=2, null=True, blank=True, validators=[MinValueValidator(0)])
     price_needs_review = models.BooleanField("Цена требует подтверждения", default=False, db_index=True)
     notes = models.TextField("Комментарий", blank=True)
@@ -266,6 +291,207 @@ class CatalogPriceHistory(TimeStampedModel):
         verbose_name_plural = "история цен"
 
 
+class Warehouse(TimeStampedModel):
+    organization = models.ForeignKey(Organization, verbose_name="Организация", on_delete=models.PROTECT, related_name="warehouses")
+    name = models.CharField("Название склада", max_length=180, default="Основной склад")
+    is_default = models.BooleanField("Основной склад", default=False)
+    archived = models.BooleanField("В архиве", default=False)
+    notes = models.TextField("Комментарий", blank=True)
+
+    class Meta:
+        ordering = ["organization__name", "name"]
+        constraints = [
+            models.UniqueConstraint(fields=["organization", "name"], name="uniq_org_warehouse_name"),
+            models.UniqueConstraint(fields=["organization"], condition=Q(is_default=True), name="uniq_default_warehouse_per_org"),
+        ]
+        verbose_name = "склад"
+        verbose_name_plural = "склады"
+
+    def __str__(self):
+        return f"{self.organization} · {self.name}"
+
+
+class Project(TimeStampedModel):
+    class Status(models.TextChoices):
+        DRAFT = "draft", "Черновик"
+        ACTIVE = "active", "В работе"
+        COMPLETED = "completed", "Завершён"
+        ARCHIVED = "archived", "Архив"
+
+    class ProjectType(models.TextChoices):
+        INSTALLATION = "installation", "Монтаж"
+        MODERNIZATION = "modernization", "Модернизация"
+        REPAIR = "repair", "Ремонт"
+        EXPANSION = "expansion", "Расширение"
+        DISMANTLING = "dismantling", "Демонтаж"
+        OTHER = "other", "Другое"
+
+    organization = models.ForeignKey(Organization, verbose_name="Организация", on_delete=models.PROTECT, related_name="projects")
+    location = models.ForeignKey(Location, verbose_name="Объект", on_delete=models.PROTECT, related_name="projects")
+    name = models.CharField("Название проекта", max_length=255)
+    code = models.CharField("Код / номер", max_length=80, blank=True)
+    project_type = models.CharField("Тип проекта", max_length=30, choices=ProjectType.choices, default=ProjectType.INSTALLATION)
+    status = models.CharField("Статус", max_length=20, choices=Status.choices, default=Status.DRAFT, db_index=True)
+    responsible_employee = models.ForeignKey(Employee, verbose_name="Ответственный", on_delete=models.PROTECT, null=True, blank=True, related_name="responsible_projects")
+    start_date = models.DateField("Дата начала", null=True, blank=True)
+    end_date = models.DateField("Дата завершения", null=True, blank=True)
+    description = models.TextField("Описание", blank=True)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, verbose_name="Создал", on_delete=models.SET_NULL, null=True, blank=True, related_name="inventory_projects_created")
+
+    class Meta:
+        ordering = ["-created_at", "name"]
+        verbose_name = "проект"
+        verbose_name_plural = "проекты"
+        indexes = [models.Index(fields=["organization", "status"], name="project_org_status_idx"), models.Index(fields=["location", "status"], name="project_location_status_idx")]
+
+    def __str__(self):
+        return self.name
+
+    def get_absolute_url(self):
+        return reverse("project_detail", args=[self.pk])
+
+    @property
+    def total_cost(self):
+        return sum((stage.total_cost for stage in self.stages.all()), 0)
+
+
+class ProjectStage(TimeStampedModel):
+    class Status(models.TextChoices):
+        DRAFT = "draft", "Черновик"
+        ACTIVE = "active", "В работе"
+        COMPLETED = "completed", "Завершён"
+
+    project = models.ForeignKey(Project, verbose_name="Проект", on_delete=models.CASCADE, related_name="stages")
+    number = models.PositiveIntegerField("Этап №", default=1)
+    name = models.CharField("Название этапа", max_length=255)
+    status = models.CharField("Статус", max_length=20, choices=Status.choices, default=Status.DRAFT, db_index=True)
+    start_date = models.DateField("Дата начала", null=True, blank=True)
+    completed_at = models.DateField("Дата завершения", null=True, blank=True)
+    notes = models.TextField("Описание / комментарий", blank=True)
+
+    class Meta:
+        ordering = ["number", "pk"]
+        constraints = [models.UniqueConstraint(fields=["project", "number"], name="uniq_project_stage_number")]
+        verbose_name = "этап проекта"
+        verbose_name_plural = "этапы проекта"
+
+    def __str__(self):
+        return f"Этап {self.number} · {self.name}"
+
+    def get_absolute_url(self):
+        return reverse("project_stage_detail", args=[self.pk])
+
+    @property
+    def total_cost(self):
+        return sum((op.total_cost for op in self.operations.all()), 0)
+
+
+class ProjectOperation(TimeStampedModel):
+    stage = models.ForeignKey(ProjectStage, verbose_name="Этап", on_delete=models.PROTECT, related_name="operations")
+    operation_date = models.DateField("Дата", default=timezone.localdate)
+    note = models.TextField("Комментарий", blank=True)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, verbose_name="Провёл", on_delete=models.SET_NULL, null=True, blank=True, related_name="project_operations")
+    voided_at = models.DateTimeField("Отменена", null=True, blank=True)
+    voided_by = models.ForeignKey(settings.AUTH_USER_MODEL, verbose_name="Отменил", on_delete=models.SET_NULL, null=True, blank=True, related_name="project_operations_voided")
+    void_reason = models.TextField("Причина отмены", blank=True)
+
+    class Meta:
+        ordering = ["-operation_date", "-created_at", "-pk"]
+        verbose_name = "операция проекта"
+        verbose_name_plural = "операции проекта"
+
+    def __str__(self):
+        return f"{self.stage} · {self.operation_date:%d.%m.%Y} · #{self.pk or 'new'}"
+
+    @property
+    def total_cost(self):
+        if self.voided_at:
+            return 0
+        return sum((line.line_total_snapshot or 0 for line in self.lines.all()), 0)
+
+    @property
+    def is_void(self):
+        return bool(self.voided_at)
+
+
+class MaterialStock(TimeStampedModel):
+    warehouse = models.ForeignKey(Warehouse, verbose_name="Склад", on_delete=models.PROTECT, related_name="stocks")
+    catalog_item = models.ForeignKey(CatalogItem, verbose_name="Номенклатура", on_delete=models.PROTECT, related_name="material_stocks")
+    quantity = models.DecimalField("Остаток", max_digits=16, decimal_places=3, default=0, validators=[MinValueValidator(0)])
+
+    class Meta:
+        ordering = ["warehouse__organization__name", "catalog_item__name"]
+        constraints = [models.UniqueConstraint(fields=["warehouse", "catalog_item"], name="uniq_warehouse_catalog_stock")]
+        verbose_name = "остаток материала"
+        verbose_name_plural = "остатки материалов"
+
+    def __str__(self):
+        return f"{self.warehouse.organization} · {self.catalog_item.name} — {self.quantity:g} {self.catalog_item.get_unit_of_measure_display()}"
+
+    @property
+    def total_value(self):
+        if self.catalog_item.unit_price is None:
+            return None
+        return self.quantity * self.catalog_item.unit_price
+
+
+class ProjectOperationLine(models.Model):
+    class LineType(models.TextChoices):
+        MATERIAL = "material", "Материал / расходник"
+        EQUIPMENT = "equipment", "Оборудование"
+
+    operation = models.ForeignKey(ProjectOperation, verbose_name="Операция", on_delete=models.CASCADE, related_name="lines")
+    line_type = models.CharField("Тип строки", max_length=20, choices=LineType.choices)
+    catalog_item = models.ForeignKey(CatalogItem, verbose_name="Номенклатура", on_delete=models.PROTECT, related_name="project_lines")
+    equipment = models.ForeignKey("Equipment", verbose_name="Экземпляр оборудования", on_delete=models.PROTECT, null=True, blank=True, related_name="project_lines")
+    warehouse = models.ForeignKey(Warehouse, verbose_name="Склад списания", on_delete=models.PROTECT, null=True, blank=True, related_name="project_lines")
+    quantity = models.DecimalField("Количество", max_digits=16, decimal_places=3, validators=[MinValueValidator(Decimal("0.001"))])
+    item_name_snapshot = models.CharField("Наименование на момент операции", max_length=255)
+    unit_snapshot = models.CharField("Единица", max_length=20, blank=True)
+    unit_price_snapshot = models.DecimalField("Цена на момент операции", max_digits=14, decimal_places=2, null=True, blank=True, validators=[MinValueValidator(0)])
+    line_total_snapshot = models.DecimalField("Сумма", max_digits=16, decimal_places=2, null=True, blank=True, validators=[MinValueValidator(0)])
+    equipment_previous_state = models.JSONField("Состояние оборудования до установки", default=dict, blank=True)
+    equipment_installed_state = models.JSONField("Состояние оборудования после установки", default=dict, blank=True)
+
+    class Meta:
+        ordering = ["pk"]
+        verbose_name = "строка операции проекта"
+        verbose_name_plural = "строки операций проекта"
+
+    def __str__(self):
+        return f"{self.item_name_snapshot} · {self.quantity:g} {self.unit_snapshot}"
+
+
+class MaterialTransaction(models.Model):
+    class TransactionType(models.TextChoices):
+        RECEIPT = "receipt", "Поступление"
+        PROJECT_WRITE_OFF = "project_write_off", "Списание в проект"
+        CONVERSION = "conversion", "Преобразование из индивидуального учёта"
+        ADJUSTMENT_PLUS = "adjustment_plus", "Корректировка +"
+        ADJUSTMENT_MINUS = "adjustment_minus", "Корректировка −"
+
+    warehouse = models.ForeignKey(Warehouse, verbose_name="Склад", on_delete=models.PROTECT, related_name="transactions")
+    catalog_item = models.ForeignKey(CatalogItem, verbose_name="Номенклатура", on_delete=models.PROTECT, related_name="material_transactions")
+    transaction_type = models.CharField("Операция", max_length=30, choices=TransactionType.choices, db_index=True)
+    quantity = models.DecimalField("Количество", max_digits=16, decimal_places=3, validators=[MinValueValidator(Decimal("0.001"))])
+    balance_after = models.DecimalField("Остаток после операции", max_digits=16, decimal_places=3, validators=[MinValueValidator(0)])
+    unit_price_snapshot = models.DecimalField("Цена", max_digits=14, decimal_places=2, null=True, blank=True, validators=[MinValueValidator(0)])
+    line_total_snapshot = models.DecimalField("Сумма", max_digits=16, decimal_places=2, null=True, blank=True, validators=[MinValueValidator(0)])
+    source = models.CharField("Источник / документ", max_length=255, blank=True)
+    note = models.TextField("Комментарий", blank=True)
+    project_line = models.OneToOneField(ProjectOperationLine, verbose_name="Строка проекта", on_delete=models.PROTECT, null=True, blank=True, related_name="material_transaction")
+    created_at = models.DateTimeField(auto_now_add=True)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, verbose_name="Пользователь", on_delete=models.SET_NULL, null=True, blank=True, related_name="material_transactions")
+
+    class Meta:
+        ordering = ["-created_at", "-pk"]
+        verbose_name = "движение материала"
+        verbose_name_plural = "движения материалов"
+
+    def __str__(self):
+        return f"{self.get_transaction_type_display()} · {self.catalog_item.name} · {self.quantity:g}"
+
+
 class Equipment(TimeStampedModel):
     class AccountingGroup(models.TextChoices):
         EMPLOYEE = "employee", "Для сотрудников"
@@ -309,6 +535,8 @@ class Equipment(TimeStampedModel):
     room = models.ForeignKey(Room, verbose_name="Помещение / комната", on_delete=models.PROTECT, null=True, blank=True, related_name="equipment")
     cabinet = models.ForeignKey(Cabinet, verbose_name="Коммутационный шкаф", on_delete=models.PROTECT, null=True, blank=True, related_name="equipment")
     freeform_location = models.CharField("Место установки (текстом)", max_length=500, blank=True)
+    origin_project = models.ForeignKey(Project, verbose_name="Проект происхождения", on_delete=models.PROTECT, null=True, blank=True, related_name="origin_equipment")
+    origin_project_stage = models.ForeignKey(ProjectStage, verbose_name="Этап происхождения", on_delete=models.PROTECT, null=True, blank=True, related_name="origin_equipment")
     quantity = models.PositiveIntegerField("Количество", default=1, validators=[MinValueValidator(1)])
     usage_status = models.CharField("Статус", max_length=30, choices=UsageStatus.choices, default=UsageStatus.STOCK)
     condition = models.CharField("Состояние", max_length=20, choices=Condition.choices, default=Condition.NEW)
@@ -414,6 +642,8 @@ class EquipmentMovement(models.Model):
         DISPOSED = "disposed", "Списание"
         ACT = "act", "Операция по акту"
         IMPORT = "import", "Импорт"
+        PROJECT_INSTALLED = "project_installed", "Установка по проекту"
+        PROJECT_ROLLBACK = "project_rollback", "Отмена проектной установки"
 
     equipment = models.ForeignKey(Equipment, verbose_name="Оборудование", on_delete=models.CASCADE, related_name="movements")
     movement_type = models.CharField("Тип операции", max_length=30, choices=MovementType.choices)
@@ -426,6 +656,7 @@ class EquipmentMovement(models.Model):
     notes = models.TextField("Комментарий", blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, verbose_name="Пользователь", on_delete=models.SET_NULL, null=True, blank=True)
+    project_stage = models.ForeignKey(ProjectStage, verbose_name="Этап проекта", on_delete=models.PROTECT, null=True, blank=True, related_name="equipment_movements")
     act = models.ForeignKey(
         "Act",
         verbose_name="Связанный акт",

@@ -22,8 +22,9 @@ from .forms import (
     ActForm, AssignmentForm, CabinetForm, CatalogItemForm, CategoryForm, EmployeeActDocumentForm,
     EmployeeEquipmentActWorkflowForm, EmployeeEquipmentOperationForm, EmployeeForm, EquipmentForm, ImportForm, LoanForm,
     LocationForm, OrganizationForm, RepairForm, RoomForm, RoomEquipmentAssignForm,
+    ProjectForm, ProjectStageForm, MaterialReceiptForm, MaterialAdjustmentForm, ProjectStageOperationForm, CatalogConvertMaterialForm,
 )
-from .models import Act, ActItem, Cabinet, CatalogItem, CatalogPriceHistory, Category, Contract, DocumentRecord, Employee, Equipment, EquipmentLoan, EquipmentMovement, Location, Organization, Reminder, RepairRecord, Room
+from .models import (Act, ActItem, Cabinet, CatalogItem, CatalogPriceHistory, Category, Contract, DocumentRecord, Employee, Equipment, EquipmentLoan, EquipmentMovement, Location, Organization, Reminder, RepairRecord, Room, Warehouse, MaterialStock, MaterialTransaction, Project, ProjectStage, ProjectOperation, ProjectOperationLine)
 from .services import equipment_export_workbook, import_equipment, import_template_workbook
 from .documents import build_employee_transfer_docx, short_person_name
 from .catalog import ensure_catalog_item, format_money, return_price_overrides, snapshot_act_items
@@ -38,6 +39,8 @@ BUSINESS_MOVEMENT_TYPES = [
     EquipmentMovement.MovementType.REPAIR,
     EquipmentMovement.MovementType.DISPOSED,
     EquipmentMovement.MovementType.ACT,
+    EquipmentMovement.MovementType.PROJECT_INSTALLED,
+    EquipmentMovement.MovementType.PROJECT_ROLLBACK,
 ]
 
 
@@ -348,13 +351,88 @@ def organization_list(request):
 
 
 @login_required
+def organization_detail(request, pk):
+    obj = get_object_or_404(Organization, pk=pk)
+    tab = request.GET.get("tab", "overview")
+    if tab not in {"overview", "objects", "employees", "equipment", "warehouse", "projects", "catalog", "history"}:
+        tab = "overview"
+
+    employees = obj.employees.filter(archived=False).select_related("workplace_location", "room")
+    equipment = obj.owned_equipment.filter(archived=False).select_related(
+        "catalog_item", "category", "responsible_employee", "location", "room", "cabinet"
+    )
+    locations = list(obj.locations.filter(archived=False).select_related("responsible_employee"))
+    for location in locations:
+        loc_employees = _employees_for_location(location)
+        loc_equipment = equipment.filter(
+            Q(location=location) | Q(cabinet__location=location) | Q(responsible_employee__in=loc_employees)
+        ).distinct()
+        location.employee_count = loc_employees.count()
+        location.equipment_count = loc_equipment.count()
+        location.inventory_value = sum((x.total_value or 0 for x in loc_equipment), Decimal("0"))
+        location.active_project_count = location.projects.filter(status=Project.Status.ACTIVE).count()
+
+    material_stocks = MaterialStock.objects.filter(
+        warehouse__organization=obj, warehouse__archived=False, catalog_item__archived=False
+    ).select_related("warehouse", "catalog_item", "catalog_item__category")
+    projects = obj.projects.select_related("location", "responsible_employee").prefetch_related("stages__operations__lines")
+    active_projects = projects.filter(status=Project.Status.ACTIVE)
+    inventory_value = sum((x.total_value or 0 for x in equipment), Decimal("0"))
+    material_value = sum((x.total_value or 0 for x in material_stocks), Decimal("0"))
+    project_cost = sum((p.total_cost for p in projects), Decimal("0"))
+    # «Без места» — только реальные ошибки размещения. Склад и резерв сами по себе
+    # являются корректным состоянием и не должны засорять блок внимания организации.
+    unplaced = equipment.filter(
+        Q(
+            usage_status=Equipment.UsageStatus.OBJECT,
+            location__isnull=True, room__isnull=True, cabinet__isnull=True, freeform_location="",
+        )
+        | Q(usage_status=Equipment.UsageStatus.EMPLOYEE, responsible_employee__isnull=True)
+    ).count()
+    attention = {
+        "unplaced": unplaced,
+        "repairs": equipment.filter(usage_status=Equipment.UsageStatus.REPAIR).count(),
+        "missing_prices": CatalogItem.objects.filter(
+            Q(equipment__owner=obj) | Q(material_stocks__warehouse__organization=obj), archived=False, unit_price__isnull=True
+        ).distinct().count(),
+    }
+    org_catalog = list(
+        CatalogItem.objects.filter(
+            Q(equipment__owner=obj, equipment__archived=False)
+            | Q(material_stocks__warehouse__organization=obj, material_stocks__warehouse__archived=False),
+            archived=False,
+        ).select_related("category").distinct().order_by("category__name", "name")
+    )
+    for catalog in org_catalog:
+        if catalog.inventory_kind == CatalogItem.InventoryKind.EQUIPMENT:
+            catalog.org_quantity = catalog.equipment.filter(owner=obj, archived=False).aggregate(total=Sum("quantity"))["total"] or 0
+        else:
+            catalog.org_quantity = catalog.material_stocks.filter(
+                warehouse__organization=obj, warehouse__archived=False
+            ).aggregate(total=Sum("quantity"))["total"] or Decimal("0")
+        catalog.org_value = catalog.unit_price * catalog.org_quantity if catalog.unit_price is not None else None
+
+    recent_material = MaterialTransaction.objects.filter(warehouse__organization=obj).select_related("catalog_item", "warehouse", "project_line__operation__stage__project")[:12]
+    recent_equipment = _visible_movements(
+        EquipmentMovement.objects.filter(equipment__owner=obj).select_related("equipment", "to_employee", "created_by", "project_stage__project")
+    )[:12]
+    return render(request, "inventory/organization_detail.html", {
+        "object": obj, "tab": tab, "employees": employees, "equipment": equipment, "locations": locations,
+        "material_stocks": material_stocks, "projects": projects, "active_projects": active_projects, "org_catalog": org_catalog,
+        "inventory_value": inventory_value, "material_value": material_value, "project_cost": project_cost,
+        "attention": attention, "recent_material": recent_material, "recent_equipment": recent_equipment,
+    })
+
+
+@login_required
 def organization_form(request, pk=None):
     obj = get_object_or_404(Organization, pk=pk) if pk else None
     form = OrganizationForm(request.POST or None, instance=obj)
     if form.is_valid():
         obj = form.save()
-        messages.success(request, "Владелец сохранён.")
-        return redirect("organization_list")
+        Warehouse.objects.get_or_create(organization=obj, name="Основной склад", defaults={"is_default": True})
+        messages.success(request, "Организация сохранена.")
+        return redirect(obj)
     return render(request, "inventory/model_form.html", {"form": form, "title": "Организация / владелец", "cancel_url": reverse("organization_list")})
 
 
@@ -434,8 +512,12 @@ def employee_form(request, pk=None):
     obj = get_object_or_404(Employee, pk=pk) if pk else None
     is_new = obj is None
     initial = {}
+    if is_new and request.GET.get("organization"):
+        initial["organization"] = request.GET.get("organization")
     if is_new and request.GET.get("location"):
-        initial["workplace_location"] = request.GET.get("location")
+        location = get_object_or_404(Location, pk=request.GET.get("location"), archived=False)
+        initial["workplace_location"] = location.pk
+        initial["organization"] = location.organization_id
     if is_new and request.GET.get("room"):
         room = get_object_or_404(Room, pk=request.GET.get("room"), archived=False)
         initial["room"] = room.pk
@@ -832,7 +914,7 @@ def location_list(request):
 def location_detail(request, pk):
     obj = get_object_or_404(Location.objects.select_related("organization"), pk=pk)
     tab = request.GET.get("tab", "overview")
-    if tab not in {"overview", "employees", "rooms", "equipment", "documents", "history"}:
+    if tab not in {"overview", "employees", "rooms", "equipment", "projects", "documents", "history"}:
         tab = "overview"
     employees_qs = _employees_for_location(obj).select_related("organization", "workplace_location").annotate(
         equipment_count=Count("equipment", filter=Q(equipment__archived=False), distinct=True)
@@ -897,6 +979,7 @@ def location_detail(request, pk):
         EquipmentMovement.objects.filter(equipment_id__in=equipment_ids)
         .select_related("equipment", "from_employee", "to_employee", "act", "created_by")
     )[:60]
+    projects = obj.projects.select_related("organization", "responsible_employee").prefetch_related("stages__operations__lines")
     linked_contracts = obj.contracts.filter(archived=False).select_related("counterparty", "organization")
     linked_documents = obj.document_records.filter(trashed_at__isnull=True).select_related(
         "document_type", "counterparty", "contract", "organization"
@@ -909,7 +992,7 @@ def location_detail(request, pk):
         "technical_count": equipment.filter(accounting_group=Equipment.AccountingGroup.TECHNICAL).count(),
         "employee_equipment_count": equipment.filter(accounting_group=Equipment.AccountingGroup.EMPLOYEE).count(),
         "rooms": rooms, "cabinets": cabinets, "history": history, "incomplete_count": incomplete_count,
-        "linked_contracts": linked_contracts, "linked_documents": linked_documents,
+        "projects": projects, "linked_contracts": linked_contracts, "linked_documents": linked_documents,
         "q": q, "employee_q": employee_q, "selected_group": group, "selected_status": status,
         "group_choices": Equipment.AccountingGroup.choices, "statuses": Equipment.UsageStatus.choices,
         "employee_sort": employee_sort, "employee_direction": employee_direction,
@@ -937,6 +1020,8 @@ def room_detail(request, pk):
 def room_form(request, pk=None):
     obj = get_object_or_404(Room, pk=pk) if pk else None
     initial = {}
+    if obj is None and request.GET.get("owner"):
+        initial["owner"] = request.GET.get("owner")
     if obj is None and request.GET.get("location"):
         initial["location"] = request.GET.get("location")
     form = RoomForm(request.POST or None, instance=obj, initial=initial)
@@ -978,6 +1063,9 @@ def room_assign_equipment(request, pk):
 
 @login_required
 def warehouse(request):
+    tab = request.GET.get("tab", "equipment")
+    if tab == "materials":
+        return redirect("material_stock_list")
     qs = Equipment.objects.filter(
         archived=False, responsible_employee__isnull=True,
         usage_status__in=[Equipment.UsageStatus.STOCK, Equipment.UsageStatus.RESERVE],
@@ -1012,12 +1100,15 @@ def warehouse(request):
 @login_required
 def location_form(request, pk=None):
     obj = get_object_or_404(Location, pk=pk) if pk else None
-    form = LocationForm(request.POST or None, instance=obj)
+    initial = {}
+    if obj is None and request.GET.get("organization"):
+        initial["organization"] = request.GET.get("organization")
+    form = LocationForm(request.POST or None, instance=obj, initial=initial)
     if form.is_valid():
-        form.save()
-        messages.success(request, "Адрес сохранён.")
-        return redirect("location_list")
-    return render(request, "inventory/model_form.html", {"form": form, "title": "Адрес", "cancel_url": reverse("location_list")})
+        saved = form.save()
+        messages.success(request, "Объект сохранён.")
+        return redirect(saved)
+    return render(request, "inventory/model_form.html", {"form": form, "title": "Объект", "cancel_url": obj.get_absolute_url() if obj else reverse("location_list")})
 
 
 @login_required
@@ -1088,12 +1179,15 @@ def catalog_list(request):
     q = request.GET.get("q", "").strip()
     category = request.GET.get("category", "")
     price_state = request.GET.get("price", "")
+    kind = request.GET.get("kind", "")
     if q:
         qs = qs.filter(
             Q(name__icontains=q) | Q(manufacturer__icontains=q) | Q(model__icontains=q) | Q(sku__icontains=q)
         )
     if category:
         qs = qs.filter(category_id=category)
+    if kind in dict(CatalogItem.InventoryKind.choices):
+        qs = qs.filter(inventory_kind=kind)
     if price_state == "missing":
         qs = qs.filter(unit_price__isnull=True)
     elif price_state == "review":
@@ -1108,7 +1202,10 @@ def catalog_list(request):
     review_count = 0
     for item in objects:
         item.unit_count = item.unit_count or 0
-        item.inventory_value = item.unit_price * item.unit_count if item.unit_price is not None else None
+        material_qty = item.material_stocks.aggregate(total=Sum("quantity"))["total"] or Decimal("0")
+        item.stock_quantity = material_qty
+        effective_qty = material_qty if item.inventory_kind != CatalogItem.InventoryKind.EQUIPMENT else item.unit_count
+        item.inventory_value = item.unit_price * effective_qty if item.unit_price is not None else None
         if item.inventory_value is not None:
             total_value += item.inventory_value
         if item.unit_price is None:
@@ -1122,6 +1219,8 @@ def catalog_list(request):
         "categories": Category.objects.filter(archived=False),
         "selected_category": category,
         "selected_price": price_state,
+        "selected_kind": kind,
+        "kinds": CatalogItem.InventoryKind.choices,
         "total_value": total_value,
         "missing_price_count": missing_price_count,
         "review_count": review_count,
@@ -1135,13 +1234,19 @@ def catalog_detail(request, pk):
         "owner", "responsible_employee", "location", "room", "cabinet", "category", "catalog_item"
     ).order_by("internal_code", "pk")
     unit_count = sum(item.quantity for item in equipment)
-    inventory_value = obj.unit_price * unit_count if obj.unit_price is not None else None
+    material_stocks = obj.material_stocks.select_related("warehouse", "warehouse__organization").all()
+    material_quantity = sum((x.quantity for x in material_stocks), Decimal("0"))
+    effective_quantity = material_quantity if obj.inventory_kind != CatalogItem.InventoryKind.EQUIPMENT else unit_count
+    inventory_value = obj.unit_price * effective_quantity if obj.unit_price is not None else None
     return render(request, "inventory/catalog_detail.html", {
         "object": obj,
         "equipment": equipment,
         "price_history": obj.price_history.select_related("changed_by").all(),
         "unit_count": unit_count,
         "inventory_value": inventory_value,
+        "material_stocks": material_stocks,
+        "material_quantity": material_quantity,
+        "can_convert_to_material": not obj.equipment.filter(archived=False).exclude(usage_status=Equipment.UsageStatus.DISPOSED).exists(),
     })
 
 
@@ -1185,6 +1290,125 @@ def catalog_form(request, pk=None):
 
 
 @login_required
+def catalog_convert_to_material(request, pk):
+    if not request.user.is_staff:
+        raise PermissionDenied
+    obj = get_object_or_404(CatalogItem.objects.select_related("category"), pk=pk)
+    if obj.inventory_kind != CatalogItem.InventoryKind.EQUIPMENT:
+        messages.info(request, "Эта номенклатура уже ведётся количественно.")
+        return redirect(obj)
+
+    active_units = obj.equipment.filter(archived=False).exclude(usage_status=Equipment.UsageStatus.DISPOSED).select_related("owner")
+    unsafe_units = []
+    convertible_units = []
+    for item in active_units:
+        unsafe_reason = None
+        if item.usage_status not in {Equipment.UsageStatus.STOCK, Equipment.UsageStatus.RESERVE}:
+            unsafe_reason = f"статус «{item.get_usage_status_display()}»"
+        elif item.responsible_employee_id or item.location_id or item.room_id or item.cabinet_id or item.freeform_location:
+            unsafe_reason = "есть действующее назначение/местоположение"
+        elif item.serial_number or item.mac_address or item.hostname or item.network_address or item.network_username or item.network_password_encrypted:
+            unsafe_reason = "есть индивидуальные идентификаторы или сетевые реквизиты"
+        elif item.origin_project_id or item.origin_project_stage_id:
+            unsafe_reason = "есть проект происхождения"
+        elif item.loans.filter(status=EquipmentLoan.Status.ACTIVE).exists():
+            unsafe_reason = "есть активная временная передача"
+        if unsafe_reason:
+            item.convert_block_reason = unsafe_reason
+            unsafe_units.append(item)
+        else:
+            convertible_units.append(item)
+
+    preview_by_org = {}
+    for item in convertible_units:
+        bucket = preview_by_org.setdefault(item.owner_id, {"organization": item.owner, "quantity": Decimal("0"), "cards": 0})
+        bucket["quantity"] += Decimal(item.quantity)
+        bucket["cards"] += 1
+    preview = list(preview_by_org.values())
+
+    form = CatalogConvertMaterialForm(request.POST or None, initial={"unit_of_measure": obj.unit_of_measure})
+    if request.method == "POST" and unsafe_units:
+        messages.error(request, "Преобразование заблокировано: есть действующие индивидуальные экземпляры, которые нельзя безопасно считать материалом.")
+    elif form.is_valid():
+        data = form.cleaned_data
+        with transaction.atomic():
+            catalog = CatalogItem.objects.select_for_update().get(pk=obj.pk)
+            if catalog.inventory_kind != CatalogItem.InventoryKind.EQUIPMENT:
+                messages.info(request, "Номенклатура уже была преобразована другим пользователем.")
+                return redirect(catalog)
+
+            locked_units = list(
+                Equipment.objects.select_for_update().filter(catalog_item=catalog, archived=False)
+                .exclude(usage_status=Equipment.UsageStatus.DISPOSED)
+                .select_related("owner")
+            )
+            for item in locked_units:
+                if (
+                    item.usage_status not in {Equipment.UsageStatus.STOCK, Equipment.UsageStatus.RESERVE}
+                    or item.responsible_employee_id or item.location_id or item.room_id or item.cabinet_id or item.freeform_location
+                    or item.serial_number or item.mac_address or item.hostname or item.network_address or item.network_username or item.network_password_encrypted
+                    or item.origin_project_id or item.origin_project_stage_id
+                    or item.loans.filter(status=EquipmentLoan.Status.ACTIVE).exists()
+                ):
+                    raise PermissionDenied(f"Экземпляр {item} изменился и больше не подходит для безопасного преобразования.")
+
+            totals = {}
+            for item in locked_units:
+                totals[item.owner_id] = totals.get(item.owner_id, Decimal("0")) + Decimal(item.quantity)
+
+            catalog.inventory_kind = data["inventory_kind"]
+            catalog.unit_of_measure = data["unit_of_measure"]
+            catalog.save(update_fields=["inventory_kind", "unit_of_measure", "updated_at"])
+
+            for organization_id, quantity in totals.items():
+                warehouse = Warehouse.objects.select_for_update().filter(
+                    organization_id=organization_id, is_default=True, archived=False
+                ).first()
+                if warehouse is None:
+                    warehouse = Warehouse.objects.create(
+                        organization_id=organization_id, name="Основной склад", is_default=True
+                    )
+                stock, _ = MaterialStock.objects.select_for_update().get_or_create(
+                    warehouse=warehouse, catalog_item=catalog, defaults={"quantity": Decimal("0")}
+                )
+                stock.quantity += quantity
+                stock.save(update_fields=["quantity", "updated_at"])
+                price = catalog.unit_price
+                MaterialTransaction.objects.create(
+                    warehouse=warehouse, catalog_item=catalog,
+                    transaction_type=MaterialTransaction.TransactionType.CONVERSION,
+                    quantity=quantity, balance_after=stock.quantity,
+                    unit_price_snapshot=price,
+                    line_total_snapshot=price * quantity if price is not None else None,
+                    source="Преобразование из индивидуального учёта FOX Inventory 1.7",
+                    note=f"Перенесено карточек: {sum(1 for x in locked_units if x.owner_id == organization_id)}",
+                    created_by=request.user,
+                )
+
+            stamp = timezone.now().strftime("%d.%m.%Y %H:%M")
+            for item in locked_units:
+                suffix = f"[MATERIAL_CONVERSION {stamp}] Перенесено в количественный складской учёт; исходное количество: {item.quantity}."
+                item.notes = (item.notes.rstrip() + "\n" + suffix).strip()
+                item.archived = True
+                item.save(update_fields=["notes", "archived", "updated_at"])
+
+        messages.success(
+            request,
+            f"Номенклатура переведена в количественный учёт. Перенесено исторических карточек: {len(locked_units)}. "
+            "Их исходные записи сохранены в архиве, остаток доступен на складе.",
+        )
+        return redirect(catalog)
+
+    return render(request, "inventory/catalog_convert_material.html", {
+        "object": obj,
+        "form": form,
+        "convertible_units": convertible_units,
+        "unsafe_units": unsafe_units,
+        "preview": preview,
+    })
+
+
+@login_required
 @require_POST
 def catalog_confirm_price(request, pk):
     if not request.user.is_staff:
@@ -1197,6 +1421,473 @@ def catalog_confirm_price(request, pk):
         obj.save(update_fields=["price_needs_review", "updated_at"])
         messages.success(request, "Текущая цена подтверждена.")
     return redirect(obj)
+
+
+@login_required
+def material_stock_list(request):
+    org = request.GET.get("organization", "")
+    q = request.GET.get("q", "").strip()
+    qs = MaterialStock.objects.filter(warehouse__archived=False, catalog_item__archived=False).select_related(
+        "warehouse", "warehouse__organization", "catalog_item", "catalog_item__category"
+    )
+    if org:
+        qs = qs.filter(warehouse__organization_id=org)
+    if q:
+        qs = qs.filter(Q(catalog_item__name__icontains=q) | Q(catalog_item__manufacturer__icontains=q) | Q(catalog_item__model__icontains=q) | Q(catalog_item__sku__icontains=q))
+    rows = list(qs.order_by("warehouse__organization__name", "catalog_item__name"))
+    total_value = sum((row.total_value or 0 for row in rows), Decimal("0"))
+    return render(request, "inventory/material_stock_list.html", {
+        "objects": rows, "organizations": Organization.objects.filter(archived=False), "selected_organization": org,
+        "q": q, "total_value": total_value,
+    })
+
+
+@login_required
+def material_receipt(request):
+    initial = {}
+    if request.GET.get("organization"):
+        initial["organization"] = request.GET["organization"]
+    form = MaterialReceiptForm(request.POST or None, initial=initial)
+    if form.is_valid():
+        data = form.cleaned_data
+        with transaction.atomic():
+            warehouse = Warehouse.objects.select_for_update().get(pk=data["warehouse"].pk)
+            catalog = CatalogItem.objects.select_for_update().get(pk=data["catalog_item"].pk)
+            stock, _ = MaterialStock.objects.select_for_update().get_or_create(warehouse=warehouse, catalog_item=catalog, defaults={"quantity": Decimal("0")})
+            stock.quantity += data["quantity"]
+            stock.save(update_fields=["quantity", "updated_at"])
+            price = data.get("unit_price") if data.get("unit_price") is not None else catalog.unit_price
+            line_total = price * data["quantity"] if price is not None else None
+            MaterialTransaction.objects.create(
+                warehouse=warehouse, catalog_item=catalog, transaction_type=MaterialTransaction.TransactionType.RECEIPT,
+                quantity=data["quantity"], balance_after=stock.quantity, unit_price_snapshot=price,
+                line_total_snapshot=line_total, source=data.get("source", ""), note=data.get("note", ""), created_by=request.user,
+            )
+            if data.get("update_catalog_price") and data.get("unit_price") is not None and catalog.unit_price != data["unit_price"]:
+                catalog.unit_price = data["unit_price"]
+                catalog.price_needs_review = False
+                catalog.save(update_fields=["unit_price", "price_needs_review", "updated_at"])
+                CatalogPriceHistory.objects.create(
+                    catalog_item=catalog, unit_price=data["unit_price"], effective_date=timezone.localdate(),
+                    source=data.get("source") or "Поступление материала", changed_by=request.user,
+                )
+        messages.success(request, f"Поступление проведено. Остаток: {stock.quantity:g} {catalog.get_unit_of_measure_display()}.")
+        return redirect(f"{reverse('material_stock_list')}?organization={warehouse.organization_id}")
+    return render(request, "inventory/material_receipt.html", {"form": form})
+
+
+@login_required
+def material_adjustment(request):
+    if not request.user.is_staff:
+        raise PermissionDenied
+    form = MaterialAdjustmentForm(request.POST or None)
+    if form.is_valid():
+        data = form.cleaned_data
+        with transaction.atomic():
+            stock = MaterialStock.objects.select_for_update().select_related("catalog_item", "warehouse").get(pk=data["stock"].pk)
+            qty = data["quantity"]
+            if data["direction"] == "minus":
+                if qty > stock.quantity:
+                    form.add_error("quantity", f"Остаток изменился. Доступно {stock.quantity:g}.")
+                    return render(request, "inventory/material_adjustment.html", {"form": form})
+                stock.quantity -= qty
+                tx_type = MaterialTransaction.TransactionType.ADJUSTMENT_MINUS
+            else:
+                stock.quantity += qty
+                tx_type = MaterialTransaction.TransactionType.ADJUSTMENT_PLUS
+            stock.save(update_fields=["quantity", "updated_at"])
+            price = stock.catalog_item.unit_price
+            MaterialTransaction.objects.create(
+                warehouse=stock.warehouse, catalog_item=stock.catalog_item, transaction_type=tx_type,
+                quantity=qty, balance_after=stock.quantity, unit_price_snapshot=price,
+                line_total_snapshot=price * qty if price is not None else None,
+                source="Ручная корректировка остатка", note=data["reason"], created_by=request.user,
+            )
+        messages.success(request, f"Остаток скорректирован: {stock.quantity:g} {stock.catalog_item.get_unit_of_measure_display()}.")
+        return redirect("material_stock_list")
+    return render(request, "inventory/material_adjustment.html", {"form": form})
+
+
+@login_required
+def project_list(request):
+    org = request.GET.get("organization", "")
+    status = request.GET.get("status", "")
+    qs = Project.objects.select_related("organization", "location", "responsible_employee").prefetch_related("stages__operations__lines")
+    if org:
+        qs = qs.filter(organization_id=org)
+    if status in dict(Project.Status.choices):
+        qs = qs.filter(status=status)
+    return render(request, "inventory/project_list.html", {
+        "objects": qs, "organizations": Organization.objects.filter(archived=False), "selected_organization": org,
+        "selected_status": status, "statuses": Project.Status.choices,
+    })
+
+
+@login_required
+def project_form(request, pk=None):
+    obj = get_object_or_404(Project, pk=pk) if pk else None
+    if obj and obj.status in {Project.Status.COMPLETED, Project.Status.ARCHIVED}:
+        messages.error(request, "Завершённый или архивный проект нельзя редактировать. Сначала возобновите проект.")
+        return redirect(obj)
+    initial = {}
+    if obj is None:
+        if request.GET.get("organization"):
+            initial["organization"] = request.GET["organization"]
+        if request.GET.get("location"):
+            initial["location"] = request.GET["location"]
+    form = ProjectForm(request.POST or None, instance=obj, initial=initial)
+    if form.is_valid():
+        project = form.save(commit=False)
+        if not project.pk:
+            project.created_by = request.user
+        project.save()
+        messages.success(request, "Проект сохранён.")
+        return redirect(project)
+    return render(request, "inventory/model_form.html", {"form": form, "title": "Проект", "cancel_url": obj.get_absolute_url() if obj else reverse("project_list")})
+
+
+@login_required
+def project_detail(request, pk):
+    obj = get_object_or_404(Project.objects.select_related("organization", "location", "responsible_employee"), pk=pk)
+    stages = obj.stages.prefetch_related("operations__lines").all()
+    material_cost = Decimal("0")
+    equipment_cost = Decimal("0")
+    for stage in stages:
+        for op in stage.operations.all():
+            if op.voided_at:
+                continue
+            for line in op.lines.all():
+                if line.line_type == ProjectOperationLine.LineType.MATERIAL:
+                    material_cost += line.line_total_snapshot or 0
+                else:
+                    equipment_cost += line.line_total_snapshot or 0
+    installed = Equipment.objects.filter(origin_project=obj, archived=False).select_related("catalog_item", "location", "room")
+    return render(request, "inventory/project_detail.html", {
+        "object": obj, "stages": stages, "material_cost": material_cost, "equipment_cost": equipment_cost,
+        "total_cost": material_cost + equipment_cost, "installed_equipment": installed,
+    })
+
+
+@login_required
+def project_stage_form(request, project_pk, pk=None):
+    project = get_object_or_404(Project, pk=project_pk)
+    obj = get_object_or_404(ProjectStage, pk=pk, project=project) if pk else None
+    if project.status in {Project.Status.COMPLETED, Project.Status.ARCHIVED}:
+        messages.error(request, "Нельзя менять этапы завершённого или архивного проекта. Сначала возобновите проект.")
+        return redirect(project)
+    if obj and obj.status == ProjectStage.Status.COMPLETED:
+        messages.error(request, "Завершённый этап нельзя редактировать. Сначала возобновите этап.")
+        return redirect(obj)
+    initial = {"number": (project.stages.order_by("-number").values_list("number", flat=True).first() or 0) + 1}
+    form = ProjectStageForm(request.POST or None, instance=obj, initial=initial)
+    if form.is_valid():
+        stage = form.save(commit=False)
+        stage.project = project
+        stage.save()
+        messages.success(request, "Этап сохранён.")
+        return redirect(stage)
+    return render(request, "inventory/model_form.html", {"form": form, "title": "Этап проекта", "cancel_url": obj.get_absolute_url() if obj else project.get_absolute_url()})
+
+
+@login_required
+def project_stage_detail(request, pk):
+    obj = get_object_or_404(ProjectStage.objects.select_related("project__organization", "project__location"), pk=pk)
+    operations = obj.operations.select_related("created_by").prefetch_related("lines__catalog_item", "lines__equipment", "lines__warehouse")
+    material_lines = ProjectOperationLine.objects.filter(operation__stage=obj, operation__voided_at__isnull=True, line_type=ProjectOperationLine.LineType.MATERIAL).select_related("catalog_item")
+    equipment_lines = ProjectOperationLine.objects.filter(operation__stage=obj, operation__voided_at__isnull=True, line_type=ProjectOperationLine.LineType.EQUIPMENT).select_related("catalog_item", "equipment")
+    return render(request, "inventory/project_stage_detail.html", {
+        "object": obj, "operations": operations, "material_lines": material_lines, "equipment_lines": equipment_lines,
+        "material_cost": sum((x.line_total_snapshot or 0 for x in material_lines), Decimal("0")),
+        "equipment_cost": sum((x.line_total_snapshot or 0 for x in equipment_lines), Decimal("0")),
+    })
+
+
+@login_required
+def project_stage_add_items(request, pk):
+    stage = get_object_or_404(ProjectStage.objects.select_related("project__organization", "project__location"), pk=pk)
+    if stage.project.status in {Project.Status.COMPLETED, Project.Status.ARCHIVED}:
+        messages.error(request, "Проект завершён или архивирован. Сначала возобновите проект.")
+        return redirect(stage.project)
+    if stage.status == ProjectStage.Status.COMPLETED:
+        messages.error(request, "Завершённый этап нельзя изменять. Возобновите его или создайте новый этап.")
+        return redirect(stage)
+    form = ProjectStageOperationForm(request.POST or None, stage=stage)
+    material_rows = [{"stock": stock, "field": form[f"material_{stock.pk}"]} for stock in form.material_stocks]
+    selected_equipment_ids = set(request.POST.getlist("equipment")) if request.method == "POST" else set()
+    equipment_rows = []
+    for item in form.fields["equipment"].queryset:
+        equipment_rows.append({"item": item, "checked": str(item.pk) in selected_equipment_ids})
+    if form.is_valid():
+        data = form.cleaned_data
+        with transaction.atomic():
+            locked_stage = ProjectStage.objects.select_for_update().select_related("project__organization", "project__location").get(pk=stage.pk)
+            if locked_stage.status == ProjectStage.Status.COMPLETED:
+                raise PermissionDenied("Этап уже завершён.")
+            if locked_stage.project.status in {Project.Status.COMPLETED, Project.Status.ARCHIVED}:
+                raise PermissionDenied("Проект уже завершён или архивирован.")
+            op = ProjectOperation.objects.create(stage=locked_stage, operation_date=data["operation_date"], note=data.get("note", ""), created_by=request.user)
+            for stock, qty in form.selected_materials:
+                locked = MaterialStock.objects.select_for_update().select_related("catalog_item", "warehouse").get(pk=stock.pk)
+                if qty > locked.quantity:
+                    raise ValueError(f"Недостаточный остаток {locked.catalog_item}")
+                price = locked.catalog_item.unit_price
+                total = price * qty
+                locked.quantity -= qty
+                locked.save(update_fields=["quantity", "updated_at"])
+                line = ProjectOperationLine.objects.create(
+                    operation=op, line_type=ProjectOperationLine.LineType.MATERIAL, catalog_item=locked.catalog_item,
+                    warehouse=locked.warehouse, quantity=qty, item_name_snapshot=locked.catalog_item.name,
+                    unit_snapshot=locked.catalog_item.get_unit_of_measure_display(), unit_price_snapshot=price,
+                    line_total_snapshot=total,
+                )
+                MaterialTransaction.objects.create(
+                    warehouse=locked.warehouse, catalog_item=locked.catalog_item,
+                    transaction_type=MaterialTransaction.TransactionType.PROJECT_WRITE_OFF, quantity=qty,
+                    balance_after=locked.quantity, unit_price_snapshot=price, line_total_snapshot=total,
+                    source=f"{locked_stage.project.name} / Этап {locked_stage.number}", note=data.get("note", ""),
+                    project_line=line, created_by=request.user,
+                )
+            for equipment in data.get("equipment", []):
+                item = Equipment.objects.select_for_update().select_related("catalog_item", "owner").get(pk=equipment.pk)
+                if item.owner_id != locked_stage.project.organization_id or item.usage_status not in [Equipment.UsageStatus.STOCK, Equipment.UsageStatus.RESERVE] or item.responsible_employee_id:
+                    raise ValueError(f"Оборудование {item} уже недоступно для установки")
+                old_status = item.usage_status
+                price = item.unit_price
+                previous_state = {
+                    "usage_status": item.usage_status,
+                    "responsible_employee_id": item.responsible_employee_id,
+                    "location_id": item.location_id,
+                    "room_id": item.room_id,
+                    "cabinet_id": item.cabinet_id,
+                    "freeform_location": item.freeform_location,
+                    "origin_project_id": item.origin_project_id,
+                    "origin_project_stage_id": item.origin_project_stage_id,
+                }
+                item.responsible_employee = None
+                item.location = locked_stage.project.location
+                item.room = data.get("room")
+                item.cabinet = data.get("cabinet")
+                item.freeform_location = data.get("freeform_location", "")
+                item.usage_status = Equipment.UsageStatus.OBJECT
+                if not item.origin_project_id:
+                    item.origin_project = locked_stage.project
+                    item.origin_project_stage = locked_stage
+                installed_state = {
+                    "usage_status": item.usage_status,
+                    "responsible_employee_id": item.responsible_employee_id,
+                    "location_id": item.location_id,
+                    "room_id": item.room_id,
+                    "cabinet_id": item.cabinet_id,
+                    "freeform_location": item.freeform_location,
+                    "origin_project_id": item.origin_project_id,
+                    "origin_project_stage_id": item.origin_project_stage_id,
+                }
+                ProjectOperationLine.objects.create(
+                    operation=op, line_type=ProjectOperationLine.LineType.EQUIPMENT, catalog_item=item.catalog_item,
+                    equipment=item, quantity=Decimal("1"), item_name_snapshot=item.display_name,
+                    unit_snapshot="шт.", unit_price_snapshot=price, line_total_snapshot=price,
+                    equipment_previous_state=previous_state, equipment_installed_state=installed_state,
+                )
+                item.save()
+                EquipmentMovement.objects.create(
+                    equipment=item, movement_type=EquipmentMovement.MovementType.PROJECT_INSTALLED,
+                    from_status=old_status, to_status=item.usage_status, project_stage=locked_stage,
+                    notes=f"Проект: {locked_stage.project.name}; этап {locked_stage.number}. {data.get('note', '')}".strip(), created_by=request.user,
+                )
+            if locked_stage.status == ProjectStage.Status.DRAFT:
+                locked_stage.status = ProjectStage.Status.ACTIVE
+                if not locked_stage.start_date:
+                    locked_stage.start_date = data["operation_date"]
+                locked_stage.save(update_fields=["status", "start_date", "updated_at"])
+            project = locked_stage.project
+            if project.status == Project.Status.DRAFT:
+                project.status = Project.Status.ACTIVE
+                if not project.start_date:
+                    project.start_date = data["operation_date"]
+                project.save(update_fields=["status", "start_date", "updated_at"])
+        messages.success(request, f"Операция проведена. Стоимость: {op.total_cost:,.2f} ₽.")
+        return redirect(stage)
+    return render(request, "inventory/project_stage_add_items.html", {"object": stage, "form": form, "material_rows": material_rows, "equipment_rows": equipment_rows})
+
+
+@login_required
+@require_POST
+def project_operation_void(request, pk):
+    if not request.user.is_staff:
+        raise PermissionDenied
+    reason = (request.POST.get("reason") or "").strip()
+    if not reason:
+        messages.error(request, "Укажите причину отмены операции.")
+        op = get_object_or_404(ProjectOperation, pk=pk)
+        return redirect(op.stage)
+    with transaction.atomic():
+        op = get_object_or_404(
+            ProjectOperation.objects.select_for_update().select_related("stage__project__location"), pk=pk
+        )
+        if op.voided_at:
+            messages.info(request, "Операция уже отменена.")
+            return redirect(op.stage)
+        if op.stage.project.status in {Project.Status.COMPLETED, Project.Status.ARCHIVED}:
+            messages.error(request, "Завершённый или архивный проект защищён от изменений. Сначала возобновите проект.")
+            return redirect(op.stage)
+        if op.stage.status == ProjectStage.Status.COMPLETED:
+            messages.error(request, "Завершённый этап защищён от изменений. Сначала возобновите этап.")
+            return redirect(op.stage)
+        lines = list(op.lines.select_related("equipment", "catalog_item", "warehouse"))
+        # Сначала проверяем оборудование. Если оно уже ушло дальше, автоматический откат небезопасен.
+        for line in lines:
+            if line.line_type != ProjectOperationLine.LineType.EQUIPMENT or not line.equipment_id:
+                continue
+            item = Equipment.objects.select_for_update().get(pk=line.equipment_id)
+            installed = line.equipment_installed_state or {}
+            current_state = {
+                "usage_status": item.usage_status,
+                "responsible_employee_id": item.responsible_employee_id,
+                "location_id": item.location_id,
+                "room_id": item.room_id,
+                "cabinet_id": item.cabinet_id,
+                "freeform_location": item.freeform_location,
+                "origin_project_id": item.origin_project_id,
+                "origin_project_stage_id": item.origin_project_stage_id,
+            }
+            if current_state != installed or item.loans.filter(status=EquipmentLoan.Status.ACTIVE).exists():
+                messages.error(
+                    request,
+                    f"Нельзя отменить операцию автоматически: {item} после установки уже меняло состояние или местоположение. "
+                    "Сначала разберите последующие движения оборудования.",
+                )
+                return redirect(op.stage)
+        for line in lines:
+            if line.line_type == ProjectOperationLine.LineType.MATERIAL:
+                stock, _ = MaterialStock.objects.select_for_update().get_or_create(
+                    warehouse=line.warehouse,
+                    catalog_item=line.catalog_item,
+                    defaults={"quantity": Decimal("0")},
+                )
+                stock.quantity += line.quantity
+                stock.save(update_fields=["quantity", "updated_at"])
+                MaterialTransaction.objects.create(
+                    warehouse=stock.warehouse,
+                    catalog_item=stock.catalog_item,
+                    transaction_type=MaterialTransaction.TransactionType.ADJUSTMENT_PLUS,
+                    quantity=line.quantity,
+                    balance_after=stock.quantity,
+                    unit_price_snapshot=line.unit_price_snapshot,
+                    line_total_snapshot=line.line_total_snapshot,
+                    source=f"Отмена проектной операции #{op.pk}",
+                    note=reason,
+                    created_by=request.user,
+                )
+            elif line.equipment_id:
+                item = Equipment.objects.select_for_update().get(pk=line.equipment_id)
+                old_status = item.usage_status
+                state = line.equipment_previous_state or {}
+                item.usage_status = state.get("usage_status") or Equipment.UsageStatus.STOCK
+                item.responsible_employee_id = state.get("responsible_employee_id")
+                item.location_id = state.get("location_id")
+                item.room_id = state.get("room_id")
+                item.cabinet_id = state.get("cabinet_id")
+                item.freeform_location = state.get("freeform_location", "")
+                item.origin_project_id = state.get("origin_project_id")
+                item.origin_project_stage_id = state.get("origin_project_stage_id")
+                item.save()
+                EquipmentMovement.objects.create(
+                    equipment=item,
+                    movement_type=EquipmentMovement.MovementType.PROJECT_ROLLBACK,
+                    from_status=old_status,
+                    to_status=item.usage_status,
+                    project_stage=op.stage,
+                    notes=f"Отмена операции проекта #{op.pk}: {reason}",
+                    created_by=request.user,
+                )
+        op.voided_at = timezone.now()
+        op.voided_by = request.user
+        op.void_reason = reason
+        op.save(update_fields=["voided_at", "voided_by", "void_reason", "updated_at"])
+    messages.success(request, "Операция отменена корректирующей записью. Материалы возвращены на склад, оборудование восстановлено в точное предыдущее состояние.")
+    return redirect(op.stage)
+
+
+@login_required
+@require_POST
+def project_stage_complete(request, pk):
+    with transaction.atomic():
+        stage = get_object_or_404(ProjectStage.objects.select_for_update().select_related("project"), pk=pk)
+        if stage.project.status in {Project.Status.COMPLETED, Project.Status.ARCHIVED}:
+            messages.error(request, "Нельзя менять этап завершённого или архивного проекта.")
+            return redirect(stage)
+        if stage.status == ProjectStage.Status.COMPLETED:
+            messages.info(request, "Этап уже завершён.")
+            return redirect(stage)
+        if not stage.operations.filter(voided_at__isnull=True).exists():
+            messages.error(request, "Нельзя завершить этап без проведённых операций.")
+            return redirect(stage)
+        stage.status = ProjectStage.Status.COMPLETED
+        stage.completed_at = timezone.localdate()
+        stage.save(update_fields=["status", "completed_at", "updated_at"])
+    messages.success(request, "Этап завершён и зафиксирован. Для изменений потребуется явное возобновление.")
+    return redirect(stage)
+
+
+@login_required
+@require_POST
+def project_stage_reopen(request, pk):
+    if not request.user.is_staff:
+        raise PermissionDenied
+    with transaction.atomic():
+        stage = get_object_or_404(ProjectStage.objects.select_for_update().select_related("project"), pk=pk)
+        if stage.project.status in {Project.Status.COMPLETED, Project.Status.ARCHIVED}:
+            messages.error(request, "Сначала возобновите проект, затем этап.")
+            return redirect(stage)
+        if stage.status != ProjectStage.Status.COMPLETED:
+            messages.info(request, "Этап уже открыт для работы.")
+            return redirect(stage)
+        stage.status = ProjectStage.Status.ACTIVE
+        stage.completed_at = None
+        stage.save(update_fields=["status", "completed_at", "updated_at"])
+    messages.success(request, "Этап возобновлён.")
+    return redirect(stage)
+
+
+@login_required
+@require_POST
+def project_complete(request, pk):
+    with transaction.atomic():
+        project = get_object_or_404(Project.objects.select_for_update(), pk=pk)
+        if project.status == Project.Status.ARCHIVED:
+            messages.error(request, "Архивный проект нельзя изменять.")
+            return redirect(project)
+        if project.status == Project.Status.COMPLETED:
+            messages.info(request, "Проект уже завершён.")
+            return redirect(project)
+        if project.stages.exclude(status=ProjectStage.Status.COMPLETED).exists() or not project.stages.exists():
+            messages.error(request, "Сначала завершите все этапы проекта.")
+            return redirect(project)
+        project.status = Project.Status.COMPLETED
+        project.end_date = timezone.localdate()
+        project.save(update_fields=["status", "end_date", "updated_at"])
+    messages.success(request, "Проект завершён и переведён в режим только для чтения.")
+    return redirect(project)
+
+
+@login_required
+@require_POST
+def project_reopen(request, pk):
+    if not request.user.is_staff:
+        raise PermissionDenied
+    with transaction.atomic():
+        project = get_object_or_404(Project.objects.select_for_update(), pk=pk)
+        if project.status == Project.Status.ARCHIVED:
+            messages.error(request, "Архивный проект нельзя возобновить этой операцией.")
+            return redirect(project)
+        if project.status != Project.Status.COMPLETED:
+            messages.info(request, "Проект уже открыт для работы.")
+            return redirect(project)
+        project.status = Project.Status.ACTIVE
+        project.end_date = None
+        project.save(update_fields=["status", "end_date", "updated_at"])
+    messages.success(request, "Проект возобновлён. Завершённые этапы остаются защищёнными до отдельного возобновления.")
+    return redirect(project)
 
 
 @login_required
@@ -1274,8 +1965,12 @@ def equipment_form(request, pk=None):
     if obj:
         previous = {"employee": obj.responsible_employee, "status": obj.usage_status, "owner": obj.owner}
     initial = {}
+    if obj is None and request.GET.get("owner"):
+        initial["owner"] = request.GET.get("owner")
     if obj is None and request.GET.get("location"):
-        initial["location"] = request.GET.get("location")
+        location = get_object_or_404(Location, pk=request.GET.get("location"), archived=False)
+        initial["location"] = location.pk
+        initial["owner"] = location.organization_id
         initial["usage_status"] = Equipment.UsageStatus.OBJECT
     if obj is None and request.GET.get("room"):
         room = get_object_or_404(Room, pk=request.GET.get("room"), archived=False)
@@ -1669,7 +2364,7 @@ def equipment_preview(request, pk):
 @login_required
 def global_search(request):
     q = request.GET.get("q", "").strip()
-    equipment = catalog = employees = locations = rooms = acts = contracts = documents = []
+    equipment = catalog = employees = locations = rooms = projects = acts = contracts = documents = []
     if q:
         equipment = Equipment.objects.filter(archived=False).filter(
             Q(internal_code__icontains=q) | Q(name__icontains=q) | Q(model__icontains=q)
@@ -1689,6 +2384,9 @@ def global_search(request):
         rooms = Room.objects.filter(archived=False).filter(
             Q(name__icontains=q) | Q(floor__icontains=q) | Q(location__label__icontains=q) | Q(location__address__icontains=q)
         ).select_related("location", "location__organization")[:10]
+        projects = Project.objects.filter(
+            Q(name__icontains=q) | Q(code__icontains=q) | Q(location__label__icontains=q) | Q(location__address__icontains=q)
+        ).select_related("organization", "location")[:10]
         acts = Act.objects.filter(Q(number__icontains=q) | Q(employee__full_name__icontains=q)).select_related("employee")[:10]
         contracts = Contract.objects.filter(archived=False).filter(
             Q(title__icontains=q) | Q(number__icontains=q) | Q(counterparty__name__icontains=q)
@@ -1698,8 +2396,8 @@ def global_search(request):
             | Q(counterparty__name__icontains=q) | Q(contract__title__icontains=q)
         ).select_related("organization", "document_type", "counterparty", "contract")[:10]
     return render(request, "inventory/search_results.html", {
-        "q": q, "equipment": equipment, "catalog": catalog, "employees": employees, "locations": locations, "rooms": rooms, "acts": acts,
-        "contracts": contracts, "documents": documents,
+        "q": q, "equipment": equipment, "catalog": catalog, "employees": employees, "locations": locations, "rooms": rooms,
+        "projects": projects, "acts": acts, "contracts": contracts, "documents": documents,
     })
 
 

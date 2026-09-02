@@ -1,11 +1,12 @@
 from pathlib import Path
+from decimal import Decimal
 from django import forms
 from django.conf import settings
 from django.contrib.auth.forms import PasswordChangeForm
 from django.core.exceptions import ValidationError
 from django.db.models import Q
 from django.utils import timezone
-from .models import Act, Cabinet, CatalogItem, Category, Employee, Equipment, EquipmentLoan, Location, Organization, RepairRecord, Room
+from .models import (Act, Cabinet, CatalogItem, Category, Employee, Equipment, EquipmentLoan, Location, Organization, RepairRecord, Room, Warehouse, MaterialStock, Project, ProjectStage)
 from .catalog import extract_catalog_sku, make_catalog_identity_key
 from .validators import normalize_mac_address
 
@@ -100,7 +101,27 @@ class EmployeeForm(StyledModelForm):
 class LocationForm(StyledModelForm):
     class Meta:
         model = Location
-        fields = ["organization", "address", "label", "archived"]
+        fields = ["organization", "address", "label", "responsible_employee", "archived"]
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        org_id = self.data.get("organization") if self.is_bound else self.initial.get("organization")
+        if not org_id and self.instance and self.instance.pk:
+            org_id = self.instance.organization_id
+        if hasattr(org_id, "pk"):
+            org_id = org_id.pk
+        qs = Employee.objects.filter(archived=False).select_related("organization")
+        if org_id:
+            qs = qs.filter(organization_id=org_id)
+        self.fields["responsible_employee"].queryset = qs
+
+    def clean(self):
+        data = super().clean()
+        org = data.get("organization")
+        responsible = data.get("responsible_employee")
+        if org and responsible and responsible.organization_id != org.pk:
+            self.add_error("responsible_employee", "Ответственный должен быть сотрудником этой организации.")
+        return data
 
 
 class RoomForm(StyledModelForm):
@@ -145,7 +166,7 @@ class CatalogItemForm(StyledModelForm):
         model = CatalogItem
         fields = [
             "category", "accounting_group", "name", "manufacturer", "model", "sku",
-            "unit_price", "price_needs_review", "notes",
+            "inventory_kind", "unit_of_measure", "unit_price", "price_needs_review", "notes",
         ]
         widgets = {"notes": forms.Textarea(attrs={"rows": 3})}
 
@@ -173,6 +194,16 @@ class CatalogItemForm(StyledModelForm):
                 "Создайте отдельную номенклатуру и перенесите нужные карточки.",
             )
             return data
+        if self.instance and self.instance.pk:
+            old_kind = self.instance.inventory_kind
+            new_kind = data.get("inventory_kind")
+            active_units = self.instance.equipment.filter(archived=False).exclude(usage_status=Equipment.UsageStatus.DISPOSED)
+            if old_kind == CatalogItem.InventoryKind.EQUIPMENT and new_kind != old_kind and active_units.exists():
+                self.add_error(
+                    "inventory_kind",
+                    "К этой номенклатуре ещё привязаны действующие индивидуальные экземпляры. "
+                    "Сначала завершите их жизненный цикл либо создайте отдельную материальную номенклатуру.",
+                )
         sku = (data.get("sku") or "").strip() or extract_catalog_sku(data.get("model", ""))
         data["sku"] = sku
         identity = make_catalog_identity_key(
@@ -186,6 +217,235 @@ class CatalogItemForm(StyledModelForm):
             duplicate = duplicate.exclude(pk=self.instance.pk)
         if duplicate.exists():
             raise ValidationError("Такая номенклатура уже существует. Откройте существующую карточку.")
+        return data
+
+
+class ProjectForm(StyledModelForm):
+    class Meta:
+        model = Project
+        fields = [
+            "organization", "location", "name", "code", "project_type",
+            "responsible_employee", "start_date", "description",
+        ]
+        widgets = {
+            "start_date": forms.DateInput(attrs={"type": "date"}),
+            "description": forms.Textarea(attrs={"rows": 4}),
+        }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        org_id = self.data.get("organization") if self.is_bound else self.initial.get("organization")
+        if not org_id and self.instance and self.instance.pk:
+            org_id = self.instance.organization_id
+        if hasattr(org_id, "pk"):
+            org_id = org_id.pk
+        locations = Location.objects.filter(archived=False).select_related("organization")
+        employees = Employee.objects.filter(archived=False).select_related("organization")
+        if org_id:
+            locations = locations.filter(organization_id=org_id)
+            employees = employees.filter(organization_id=org_id)
+        self.fields["location"].queryset = locations
+        self.fields["responsible_employee"].queryset = employees
+
+    def clean(self):
+        data = super().clean()
+        org = data.get("organization")
+        location = data.get("location")
+        employee = data.get("responsible_employee")
+        if org and location and location.organization_id != org.pk:
+            self.add_error("location", "Объект относится к другой организации.")
+        if org and employee and employee.organization_id != org.pk:
+            self.add_error("responsible_employee", "Ответственный сотрудник относится к другой организации.")
+        if self.instance and self.instance.pk and self.instance.stages.filter(operations__isnull=False).exists():
+            if org and org.pk != self.instance.organization_id:
+                self.add_error("organization", "Нельзя менять организацию проекта после проведения операций.")
+            if location and location.pk != self.instance.location_id:
+                self.add_error("location", "Нельзя менять объект проекта после проведения операций.")
+        return data
+
+
+class ProjectStageForm(StyledModelForm):
+    class Meta:
+        model = ProjectStage
+        fields = ["number", "name", "start_date", "notes"]
+        widgets = {
+            "start_date": forms.DateInput(attrs={"type": "date"}),
+            "notes": forms.Textarea(attrs={"rows": 4}),
+        }
+
+    def clean_number(self):
+        number = self.cleaned_data["number"]
+        if self.instance and self.instance.pk and self.instance.operations.exists() and number != self.instance.number:
+            raise ValidationError("Нельзя менять номер этапа после проведения операций.")
+        return number
+
+
+class CatalogConvertMaterialForm(forms.Form):
+    inventory_kind = forms.ChoiceField(
+        label="Новый тип учёта",
+        choices=[
+            (CatalogItem.InventoryKind.MATERIAL, "Материал"),
+            (CatalogItem.InventoryKind.CONSUMABLE, "Расходник"),
+            (CatalogItem.InventoryKind.COMPONENT, "Запчасть / компонент"),
+        ],
+        initial=CatalogItem.InventoryKind.MATERIAL,
+    )
+    unit_of_measure = forms.ChoiceField(
+        label="Единица измерения",
+        choices=CatalogItem.UnitOfMeasure.choices,
+        initial=CatalogItem.UnitOfMeasure.PCS,
+    )
+    confirm = forms.BooleanField(
+        label="Подтверждаю преобразование",
+        help_text="Подходящие складские карточки будут перенесены в количественный остаток и архивированы как исторические.",
+    )
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        for field in self.fields.values():
+            if isinstance(field.widget, forms.CheckboxInput):
+                field.widget.attrs.setdefault("class", "checkbox")
+            else:
+                field.widget.attrs.setdefault("class", "input")
+
+
+class MaterialReceiptForm(forms.Form):
+    organization = forms.ModelChoiceField(label="Организация", queryset=Organization.objects.none())
+    warehouse = forms.ModelChoiceField(label="Склад", queryset=Warehouse.objects.none())
+    catalog_item = forms.ModelChoiceField(label="Материал / расходник", queryset=CatalogItem.objects.none())
+    quantity = forms.DecimalField(label="Количество", min_value=Decimal("0.001"), max_digits=16, decimal_places=3)
+    unit_price = forms.DecimalField(label="Цена за единицу, ₽", required=False, min_value=0, max_digits=14, decimal_places=2)
+    source = forms.CharField(label="Источник / документ", required=False, max_length=255, help_text="Например: Счёт №15 от 01.09.2026")
+    update_catalog_price = forms.BooleanField(label="Сделать эту цену текущей учётной", required=False, initial=True)
+    note = forms.CharField(label="Комментарий", required=False, widget=forms.Textarea(attrs={"rows": 3}))
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["organization"].queryset = Organization.objects.filter(archived=False)
+        org_id = self.data.get("organization") if self.is_bound else self.initial.get("organization")
+        if hasattr(org_id, "pk"):
+            org_id = org_id.pk
+        warehouses = Warehouse.objects.filter(archived=False).select_related("organization")
+        if org_id:
+            warehouses = warehouses.filter(organization_id=org_id)
+        self.fields["warehouse"].queryset = warehouses
+        self.fields["catalog_item"].queryset = CatalogItem.objects.filter(
+            archived=False,
+            inventory_kind__in=[CatalogItem.InventoryKind.MATERIAL, CatalogItem.InventoryKind.CONSUMABLE, CatalogItem.InventoryKind.COMPONENT],
+        ).select_related("category")
+        for field in self.fields.values():
+            if isinstance(field.widget, forms.CheckboxInput):
+                field.widget.attrs.setdefault("class", "checkbox")
+            else:
+                field.widget.attrs.setdefault("class", "input")
+
+    def clean(self):
+        data = super().clean()
+        org = data.get("organization")
+        warehouse = data.get("warehouse")
+        if org and warehouse and warehouse.organization_id != org.pk:
+            self.add_error("warehouse", "Выбранный склад относится к другой организации.")
+        catalog = data.get("catalog_item")
+        if catalog and data.get("unit_price") is None and catalog.unit_price is None:
+            self.add_error("unit_price", "Укажите цену: у этой номенклатуры ещё нет текущей учётной цены.")
+        return data
+
+
+class MaterialAdjustmentForm(forms.Form):
+    direction = forms.ChoiceField(label="Операция", choices=[("plus", "Увеличить остаток"), ("minus", "Уменьшить остаток")])
+    stock = forms.ModelChoiceField(label="Складская позиция", queryset=MaterialStock.objects.none())
+    quantity = forms.DecimalField(label="Количество", min_value=Decimal("0.001"), max_digits=16, decimal_places=3)
+    reason = forms.CharField(label="Причина корректировки", max_length=500, widget=forms.Textarea(attrs={"rows": 3}))
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["stock"].queryset = MaterialStock.objects.filter(warehouse__archived=False).select_related(
+            "warehouse", "warehouse__organization", "catalog_item"
+        ).order_by("warehouse__organization__name", "catalog_item__name")
+        for field in self.fields.values():
+            field.widget.attrs.setdefault("class", "input")
+
+    def clean(self):
+        data = super().clean()
+        stock = data.get("stock")
+        qty = data.get("quantity")
+        if stock and qty and data.get("direction") == "minus" and qty > stock.quantity:
+            self.add_error("quantity", f"Нельзя уменьшить на {qty:g}: текущий остаток {stock.quantity:g}.")
+        return data
+
+
+class ProjectStageOperationForm(forms.Form):
+    operation_date = forms.DateField(label="Дата операции", initial=timezone.localdate, widget=forms.DateInput(attrs={"type": "date", "class": "input"}))
+    equipment = forms.ModelMultipleChoiceField(
+        label="Оборудование",
+        queryset=Equipment.objects.none(),
+        required=False,
+        widget=forms.CheckboxSelectMultiple,
+    )
+    room = forms.ModelChoiceField(label="Помещение", queryset=Room.objects.none(), required=False)
+    cabinet = forms.ModelChoiceField(label="Шкаф", queryset=Cabinet.objects.none(), required=False)
+    freeform_location = forms.CharField(label="Зона / место установки", required=False, max_length=500)
+    note = forms.CharField(label="Комментарий к операции", required=False, widget=forms.Textarea(attrs={"rows": 3}))
+
+    def __init__(self, *args, stage=None, **kwargs):
+        self.stage = stage
+        super().__init__(*args, **kwargs)
+        project = stage.project
+        self.material_stocks = list(
+            MaterialStock.objects.filter(
+                warehouse__organization=project.organization,
+                warehouse__archived=False,
+                quantity__gt=0,
+                catalog_item__archived=False,
+                catalog_item__inventory_kind__in=[CatalogItem.InventoryKind.MATERIAL, CatalogItem.InventoryKind.CONSUMABLE, CatalogItem.InventoryKind.COMPONENT],
+            ).select_related("warehouse", "catalog_item", "catalog_item__category").order_by("catalog_item__name", "warehouse__name")
+        )
+        for stock in self.material_stocks:
+            name = f"material_{stock.pk}"
+            self.fields[name] = forms.DecimalField(
+                label=stock.catalog_item.name,
+                required=False,
+                min_value=Decimal("0.001"),
+                max_digits=16,
+                decimal_places=3,
+                widget=forms.NumberInput(attrs={"class": "input material-qty", "step": "0.001", "min": "0", "max": str(stock.quantity), "placeholder": "0", "data-price": str(stock.catalog_item.unit_price or ""), "data-stock": str(stock.quantity)}),
+            )
+        self.fields["equipment"].queryset = Equipment.objects.filter(
+            owner=project.organization,
+            archived=False,
+            responsible_employee__isnull=True,
+            usage_status__in=[Equipment.UsageStatus.STOCK, Equipment.UsageStatus.RESERVE],
+            catalog_item__inventory_kind=CatalogItem.InventoryKind.EQUIPMENT,
+        ).select_related("catalog_item", "category", "owner").order_by("internal_code", "name")
+        self.fields["room"].queryset = Room.objects.filter(location=project.location, archived=False)
+        self.fields["cabinet"].queryset = Cabinet.objects.filter(location=project.location, archived=False).select_related("room")
+        for name in ["room", "cabinet", "freeform_location", "note"]:
+            self.fields[name].widget.attrs.setdefault("class", "input")
+
+    def clean(self):
+        data = super().clean()
+        selected_materials = []
+        for stock in self.material_stocks:
+            qty = data.get(f"material_{stock.pk}")
+            if not qty:
+                continue
+            if qty > stock.quantity:
+                self.add_error(f"material_{stock.pk}", f"Доступно только {stock.quantity:g} {stock.catalog_item.get_unit_of_measure_display()}.")
+            if stock.catalog_item.unit_price is None:
+                self.add_error(f"material_{stock.pk}", "Сначала задайте учётную цену номенклатуры.")
+            selected_materials.append((stock, qty))
+        equipment = data.get("equipment")
+        if equipment:
+            for item in equipment:
+                if item.unit_price is None:
+                    self.add_error("equipment", f"У {item} не задана учётная цена.")
+        room = data.get("room")
+        cabinet = data.get("cabinet")
+        if cabinet and room and cabinet.room_id and cabinet.room_id != room.pk:
+            self.add_error("cabinet", "Шкаф находится в другом помещении.")
+        if not selected_materials and not equipment:
+            raise ValidationError("Добавьте хотя бы один материал или экземпляр оборудования.")
+        self.selected_materials = selected_materials
         return data
 
 
@@ -203,7 +463,11 @@ class EquipmentForm(StyledModelForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.fields["catalog_item"].queryset = CatalogItem.objects.filter(archived=False).select_related("category")
+        catalog_qs = CatalogItem.objects.filter(archived=False).filter(
+            Q(inventory_kind=CatalogItem.InventoryKind.EQUIPMENT)
+            | Q(pk=self.instance.catalog_item_id if self.instance and self.instance.pk else None)
+        ).select_related("category")
+        self.fields["catalog_item"].queryset = catalog_qs
         self.fields["catalog_item"].empty_label = "Выберите номенклатуру или заполните данные вручную"
         self.fields["catalog_item"].help_text = (
             "Для одинаковых устройств выбирайте одну номенклатуру: название, модель и цена будут едиными."

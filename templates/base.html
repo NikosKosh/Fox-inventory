@@ -29,18 +29,19 @@
 
     <nav class="nav app-nav" data-nav aria-label="Основная навигация">
       <a class="nav-item {% if request.resolver_match.url_name == 'dashboard' %}active{% endif %}" href="{% url 'dashboard' %}">Главная</a>
-      <a class="nav-item {% if request.resolver_match.url_name == 'warehouse' %}active{% endif %}" href="{% url 'warehouse' %}">Склад</a>
+      <a class="nav-item {% if request.resolver_match.url_name == 'organization_list' or request.resolver_match.url_name == 'organization_detail' %}active{% endif %}" href="{% url 'organization_list' %}">Организации</a>
+      <a class="nav-item {% if request.resolver_match.url_name == 'warehouse' or request.resolver_match.url_name == 'material_stock_list' or request.resolver_match.url_name == 'material_receipt' %}active{% endif %}" href="{% url 'warehouse' %}">Склад</a>
       <a class="nav-item {% if request.resolver_match.url_name == 'employee_list' or request.resolver_match.url_name == 'employee_detail' %}active{% endif %}" href="{% url 'employee_list' %}">Сотрудники</a>
-      <a class="nav-item {% if request.resolver_match.url_name == 'location_list' or request.resolver_match.url_name == 'location_detail' %}active{% endif %}" href="{% url 'location_list' %}">Объекты / адреса</a>
       <a class="nav-item {% if request.resolver_match.url_name == 'equipment_list' or request.resolver_match.url_name == 'equipment_detail' %}active{% endif %}" href="{% url 'equipment_list' %}">Оборудование</a>
+      <a class="nav-item {% if 'project' in request.resolver_match.url_name %}active{% endif %}" href="{% url 'project_list' %}">Проекты</a>
       <a class="nav-item {% if '/documents/' in request.path or '/contracts/' in request.path or '/counterparties/' in request.path or '/reminders/' in request.path %}active{% endif %}" href="{% url 'document_center' %}">Документы</a>
       <a class="nav-item attention-link {% if request.resolver_match.url_name == 'control_center' %}active{% endif %}" href="{% url 'control_center' %}">Контроль</a>
       <details class="nav-more">
         <summary>Ещё <span aria-hidden="true">⌄</span></summary>
         <div class="nav-menu">
           <a href="{% url 'act_list' %}">Акты</a>
+          <a href="{% url 'location_list' %}">Все объекты</a>
           <a href="{% url 'cabinet_list' %}">Шкафы</a>
-          <a href="{% url 'organization_list' %}">Организации</a>
           <a href="{% url 'catalog_list' %}">Номенклатура</a>
           <a href="{% url 'category_list' %}">Категории</a>
           <a href="{% url 'archive_list' %}">Архив</a>

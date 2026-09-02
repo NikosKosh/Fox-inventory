@@ -1,0 +1,42 @@
+FOX Inventory 1.7.0 validation
+Date: 2026-09-02
+
+Local packaging validation:
+- VERSION == 1.7.0: PASS
+- Python compileall (config + inventory): PASS
+- Python AST parse for all inventory/*.py: PASS
+- URL names referenced by templates: PASS
+- Old migrations 0001..0017 byte-identical to 1.6.0 source: PASS
+- git diff --check equivalent (1.6.0 -> 1.7.0): PASS; no whitespace errors
+- no accidental publish artifacts / weird filenames: PASS
+- release regression suite added: inventory/test_release_170.py
+- production verifier added: inventory/management/commands/check_workspace_170.py
+- post-deploy verifier added: scripts/verify-1.7.0.sh
+
+Safety cases covered by release tests/source checks:
+- organization workspace opens with objects/projects/warehouse
+- material receipt increases stock and records immutable history
+- project operation consumes material and installs equipment atomically
+- project price snapshots are retained
+- project operation void restores material stock
+- equipment project rollback restores exact previous status/location/room/cabinet/freeform/origin state
+- rollback is refused after later equipment state/placement changes
+- completed projects/stages are read-only until explicit staff reopen
+- stock/reserve equipment is not falsely flagged as “unplaced”
+- safe legacy stock cards can be converted to material stock
+- conversion is blocked for real individual assets (serial/network/assignment etc.)
+
+Packaging-environment limitation:
+- Django is not installed in this isolated runtime and outbound package installation is unavailable.
+- Therefore manage.py check, makemigrations --check and Django TestCase execution cannot be run locally here.
+- The repository CI performs exactly these checks on push: manage.py check, makemigrations --check --dry-run, and python manage.py test.
+- Production deployment must proceed only after CI succeeds and must run scripts/verify-1.7.0.sh after container startup.
+
+Expected production migration:
+- 0018_projects_materials_workspace [X]
+- existing equipment count preserved
+- existing equipment remains linked to CatalogItem
+- existing CatalogItem defaults to inventory_kind=equipment, unit_of_measure=pcs
+- each existing organization gets one default “Основной склад”
+- material stock cannot be negative
+- no active individual asset may be attached to a material CatalogItem
