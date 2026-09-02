@@ -302,15 +302,18 @@ class NavigationAndWorkplaceTests(TestCase):
         response = self.client.get(reverse("archive_list"))
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, self.employee.full_name)
-        self.assertContains(response, "Объекты / адреса")
+        self.assertContains(response, "Все объекты")
 
-    def test_employee_detail_remembers_filtered_back_url(self):
+    def test_employee_detail_uses_explicit_back_url_without_session_leak(self):
         filtered = reverse("employee_list") + "?q=Иванов"
+
         response = self.client.get(
             reverse("employee_detail", args=[self.employee.pk]),
             {"back": filtered},
         )
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, filtered.replace("&", "&amp;"))
+
         response = self.client.get(reverse("employee_detail", args=[self.employee.pk]))
-        self.assertContains(response, filtered.replace("&", "&amp;"))
+        self.assertContains(response, reverse("employee_list"))
+        self.assertNotContains(response, filtered.replace("&", "&amp;"))

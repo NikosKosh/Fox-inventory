@@ -85,6 +85,8 @@ class Release160CatalogPricingTests(TestCase):
             "manufacturer": self.catalog.manufacturer,
             "model": self.catalog.model,
             "sku": self.catalog.sku,
+            "inventory_kind": CatalogItem.InventoryKind.EQUIPMENT,
+            "unit_of_measure": CatalogItem.UnitOfMeasure.PCS,
             "unit_price": "63000.00",
             "price_needs_review": "on",
             "notes": "",
